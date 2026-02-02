@@ -1,3 +1,3 @@
 Progress:
 
-- Day 1: Idea ready, Initialised Basic Next.js App with a custom shadcn/ui theme
+- Day 1: idea ready, next.js with custom shadcn/ui theme, inngest for background jobs 
