@@ -1,5 +1,5 @@
-import { ComponentExample } from "@/components/component-example";
+import { WorkflowStream } from "@/components/workflow-stream";
 
 export default function Page() {
-return <ComponentExample />;
+  return <WorkflowStream />;
 }
