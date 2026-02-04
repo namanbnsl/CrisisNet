@@ -1,5 +1,5 @@
-import { WorkflowStream } from "@/components/workflow-stream";
+import { CrisisDashboard } from "@/components/crisis-dashboard";
 
 export default function Page() {
-  return <WorkflowStream />;
+  return <CrisisDashboard />;
 }
