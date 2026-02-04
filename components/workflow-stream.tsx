@@ -1,73 +1,70 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { connectors, webrtc, streams } from "@roboflow/inference-sdk";
 
-type WebrtcConnection = {
-  remoteStream: () => Promise<MediaStream>;
-  cleanup: () => void;
+type Prediction = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+  class: string;
 };
 
 export function WorkflowStream() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const connectionRef = useRef<WebrtcConnection | null>(null);
+  const connectionRef = useRef<Awaited<
+    ReturnType<typeof webrtc.useStream>
+  > | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [status, setStatus] = useState("Idle");
-
-  useEffect(() => {
-    return () => {
-      connectionRef.current?.cleanup();
-    };
-  }, []);
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
   async function start() {
-    if (connecting || streaming) return;
     setConnecting(true);
-    setStatus("Connecting...");
-
     try {
-      // ⚠️ Testing only - exposes API key in frontend. Use a backend proxy in production.
+      // ⚠️ Testing only - exposes API key in frontend. Use a backend proxy in production
       const connector = connectors.withApiKey(
-        process.env.NEXT_PUBLIC_ROBOFLOW_API_KEY,
+        process.env.NEXT_PUBLIC_ROBOFLOW_API_KEY!,
         {
           serverUrl: "https://serverless.roboflow.com",
         },
       );
-
       const stream = await streams.useCamera({
         video: { facingMode: "environment" },
       });
 
-      connectionRef.current = (await webrtc.useStream({
+      connectionRef.current = await webrtc.useStream({
         source: stream,
         connector,
         wrtcParams: {
           workspaceName: "namanb",
           workflowId: "crisisnet-final",
-          streamOutputNames: ["predictions"],
-          dataOutputNames: ["output_visualisation_1"],
+          streamOutputNames: ["output_visualization_1"],
+          dataOutputNames: ["predictions"],
           processingTimeout: 600,
           requestedPlan: "webrtc-gpu-medium",
-          requestedRegion: "us",
+          requestedRegion: "ap",
         },
         onData: (data) => {
           console.log("Predictions:", data);
-          setStatus("Streaming");
+          const start = performance.now();
+          const dataObj = data as unknown as Record<string, unknown>;
+          if (dataObj?.predictions && Array.isArray(dataObj.predictions)) {
+            setPredictions(dataObj.predictions as Prediction[]);
+          }
+          setLatencyMs(Math.round(performance.now() - start));
         },
-      })) as WebrtcConnection;
+      });
 
       if (videoRef.current) {
         videoRef.current.srcObject = await connectionRef.current.remoteStream();
       }
-
       setStreaming(true);
-      setStatus("Streaming");
     } catch (error) {
-      console.error(error);
-      setStatus("Connection failed");
-      connectionRef.current?.cleanup();
-      connectionRef.current = null;
+      console.error("Failed to start stream:", error);
     } finally {
       setConnecting(false);
     }
@@ -75,25 +72,26 @@ export function WorkflowStream() {
 
   function stop() {
     connectionRef.current?.cleanup();
-    connectionRef.current = null;
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    setPredictions([]);
+    setLatencyMs(null);
     setStreaming(false);
-    setStatus("Stopped");
   }
+
+  const status = connecting ? "Connecting..." : streaming ? "Running" : "Idle";
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 py-12">
         <div className="flex flex-col gap-2">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">
-            Roboflow Realtime
+            CrisisNet Detection
           </p>
-          <h1 className="text-3xl font-semibold">Workflow WebRTC Stream</h1>
+          <h1 className="text-3xl font-semibold">Live Camera Feed</h1>
           <p className="text-sm text-muted-foreground">
-            This connects your camera directly to the Roboflow workflow using
-            WebRTC for realtime inference and visualization.
+            Streams your camera via WebRTC to Roboflow for real-time detection.
           </p>
         </div>
 
@@ -102,7 +100,10 @@ export function WorkflowStream() {
             Status: {status}
           </span>
           <span className="rounded-full bg-secondary px-3 py-1">
-            Region: us · Plan: webrtc-gpu-medium
+            Latency: {latencyMs ? `${latencyMs}ms` : "--"}
+          </span>
+          <span className="rounded-full bg-secondary px-3 py-1">
+            Detections: {predictions.length}
           </span>
           <button
             type="button"
@@ -114,14 +115,31 @@ export function WorkflowStream() {
           </button>
         </div>
 
-        <div className="overflow-hidden rounded-3xl border border-border bg-card shadow-sm">
+        <div className="relative overflow-hidden rounded-3xl border border-border bg-card shadow-sm">
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
             className="h-auto w-full"
+            style={{ minHeight: 480 }}
           />
+          {!streaming && !connecting && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+              <button
+                type="button"
+                className="rounded-full bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+                onClick={start}
+              >
+                Start Camera
+              </button>
+            </div>
+          )}
+          {connecting && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+              <p className="text-sm text-white">Connecting to Roboflow...</p>
+            </div>
+          )}
         </div>
       </div>
     </div>

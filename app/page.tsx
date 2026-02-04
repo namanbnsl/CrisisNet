@@ -1,5 +1,5 @@
-import { RoboflowWebcam } from "@/components/roboflow-webcam";
+import { WorkflowStream } from "@/components/workflow-stream";
 
 export default function Page() {
-  return <RoboflowWebcam />;
+  return <WorkflowStream />;
 }
