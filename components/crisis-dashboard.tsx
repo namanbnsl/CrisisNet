@@ -33,7 +33,15 @@ type SensorData = {
   timestamp: number;
 };
 
-const TEMP_THRESHOLD = 35; // Temperature threshold to trigger camera
+const TEMP_THRESHOLD = 40; // DHT11 temperature threshold to trigger camera
+
+// MQ-2 Smoke/Gas thresholds
+const MQ2_CLEAN = 300;
+const MQ2_LIGHT = 600;
+
+// MQ-135 Air Quality thresholds  
+const MQ135_GOOD = 400;
+const MQ135_MODERATE = 800;
 
 export function CrisisDashboard() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -47,6 +55,7 @@ export function CrisisDashboard() {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [fireDetected, setFireDetected] = useState(false);
   const [cameraVisible, setCameraVisible] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [alertLevel, setAlertLevel] = useState<"normal" | "warning" | "danger">("normal");
 
   // Check if any prediction indicates fire
@@ -61,56 +70,70 @@ export function CrisisDashboard() {
     }
   }, []);
 
-  // Start camera stream
-  const startCamera = useCallback(async () => {
-    if (streaming || connecting) return;
-    
-    setConnecting(true);
-    setCameraVisible(true);
-    
-    try {
-      const connector = connectors.withApiKey(
-        process.env.NEXT_PUBLIC_ROBOFLOW_API_KEY!,
-        { serverUrl: "https://serverless.roboflow.com" }
-      );
+  // Pre-initialize camera on mount for instant reveal
+  useEffect(() => {
+    let mounted = true;
+
+    const initCamera = async () => {
+      if (connectionRef.current) return;
       
-      const stream = await streams.useCamera({
-        video: { facingMode: "environment" },
-      });
+      setConnecting(true);
+      
+      try {
+        const connector = connectors.withApiKey(
+          process.env.NEXT_PUBLIC_ROBOFLOW_API_KEY!,
+          { serverUrl: "https://serverless.roboflow.com" }
+        );
+        
+        const stream = await streams.useCamera({
+          video: { facingMode: "environment" },
+        });
 
-      connectionRef.current = await webrtc.useStream({
-        source: stream,
-        connector,
-        wrtcParams: {
-          workspaceName: "namanb",
-          workflowId: "crisisnet-final",
-          streamOutputNames: ["output_visualization_1"],
-          dataOutputNames: ["predictions"],
-          processingTimeout: 600,
-          requestedPlan: "webrtc-gpu-medium",
-          requestedRegion: "ap",
-        },
-        onData: (data) => {
-          const dataObj = data as unknown as Record<string, unknown>;
-          if (dataObj?.predictions && Array.isArray(dataObj.predictions)) {
-            const preds = dataObj.predictions as Prediction[];
-            setPredictions(preds);
-            checkForFire(preds);
-          }
-        },
-      });
+        if (!mounted) return;
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = await connectionRef.current.remoteStream();
+        connectionRef.current = await webrtc.useStream({
+          source: stream,
+          connector,
+          wrtcParams: {
+            workspaceName: "namanb",
+            workflowId: "crisisnet-final",
+            streamOutputNames: ["output_visualization_1"],
+            dataOutputNames: ["predictions"],
+            processingTimeout: 600,
+            requestedPlan: "webrtc-gpu-medium",
+            requestedRegion: "ap",
+          },
+          onData: (data) => {
+            const dataObj = data as unknown as Record<string, unknown>;
+            if (dataObj?.predictions && Array.isArray(dataObj.predictions)) {
+              const preds = dataObj.predictions as Prediction[];
+              setPredictions(preds);
+              checkForFire(preds);
+            }
+          },
+        });
+
+        if (!mounted) return;
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = await connectionRef.current.remoteStream();
+        }
+        setStreaming(true);
+        setCameraReady(true);
+      } catch (error) {
+        console.error("Failed to initialize camera:", error);
+      } finally {
+        if (mounted) setConnecting(false);
       }
-      setStreaming(true);
-    } catch (error) {
-      console.error("Failed to start stream:", error);
-      setCameraVisible(false);
-    } finally {
-      setConnecting(false);
-    }
-  }, [streaming, connecting, checkForFire]);
+    };
+
+    initCamera();
+
+    return () => {
+      mounted = false;
+      connectionRef.current?.cleanup();
+    };
+  }, [checkForFire]);
 
   // Poll sensor data
   useEffect(() => {
@@ -121,11 +144,11 @@ export function CrisisDashboard() {
         if (!data.error) {
           setSensorData(data);
           
-          // Check temperature threshold
-          if (data.dhtTemp >= TEMP_THRESHOLD || data.bnoTemp >= TEMP_THRESHOLD) {
-            if (!streaming && !connecting) {
+          // Check DHT11 temperature threshold - instantly reveal pre-loaded camera
+          if (data.dhtTemp >= TEMP_THRESHOLD) {
+            if (!cameraVisible) {
               setAlertLevel("warning");
-              startCamera();
+              setCameraVisible(true);
             }
           }
         }
@@ -137,7 +160,7 @@ export function CrisisDashboard() {
     fetchSensorData();
     const interval = setInterval(fetchSensorData, 1000);
     return () => clearInterval(interval);
-  }, [streaming, connecting, startCamera]);
+  }, [cameraVisible]);
 
   const getTemperatureColor = (temp: number) => {
     if (temp >= TEMP_THRESHOLD) return "text-red-500";
@@ -145,10 +168,16 @@ export function CrisisDashboard() {
     return "text-green-500";
   };
 
-  const getGasLevel = (value: number) => {
-    if (value > 2000) return { level: "High", color: "text-red-500" };
-    if (value > 1000) return { level: "Medium", color: "text-orange-500" };
-    return { level: "Low", color: "text-green-500" };
+  const getMQ2Level = (value: number) => {
+    if (value > MQ2_LIGHT) return { level: "High smoke/gas", color: "text-red-500" };
+    if (value > MQ2_CLEAN) return { level: "Light smoke/gas", color: "text-orange-500" };
+    return { level: "Clean air", color: "text-green-500" };
+  };
+
+  const getMQ135Level = (value: number) => {
+    if (value > MQ135_MODERATE) return { level: "Poor air", color: "text-red-500" };
+    if (value > MQ135_GOOD) return { level: "Moderate", color: "text-orange-500" };
+    return { level: "Very good", color: "text-green-500" };
   };
 
   return (
@@ -183,16 +212,33 @@ export function CrisisDashboard() {
             </p>
             <h1 className="text-3xl font-bold">Sensor Dashboard</h1>
           </div>
-          <div className="flex items-center gap-2">
-            <div
-              className={cn(
-                "h-3 w-3 rounded-full",
-                sensorData ? "animate-pulse bg-green-500" : "bg-gray-400"
-              )}
-            />
-            <span className="text-sm text-muted-foreground">
-              {sensorData ? "Connected" : "Waiting for sensor..."}
-            </span>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "h-3 w-3 rounded-full",
+                  sensorData ? "animate-pulse bg-green-500" : "bg-gray-400"
+                )}
+              />
+              <span className="text-sm text-muted-foreground">
+                {sensorData ? "Sensors" : "Waiting..."}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "h-3 w-3 rounded-full",
+                  cameraReady
+                    ? "bg-green-500"
+                    : connecting
+                    ? "animate-pulse bg-orange-500"
+                    : "bg-gray-400"
+                )}
+              />
+              <span className="text-sm text-muted-foreground">
+                {cameraReady ? "Camera ready" : connecting ? "Loading camera..." : "Camera"}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -231,72 +277,79 @@ export function CrisisDashboard() {
           </div>
 
           {/* MQ2 Gas Sensor Card */}
-          <div className="rounded-2xl border bg-card p-6 shadow-sm">
+          <div
+            className={cn(
+              "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
+              sensorData?.mq2 && sensorData.mq2 > MQ2_LIGHT &&
+                "border-red-500 ring-2 ring-red-500/20"
+            )}
+          >
             <div className="flex items-center gap-3">
               <div className="rounded-xl bg-purple-500/10 p-3">
                 <Wind className="h-6 w-6 text-purple-500" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">MQ2 (Smoke)</p>
+                <p className="text-sm text-muted-foreground">MQ-2 (Smoke/Gas)</p>
                 <p className="text-2xl font-bold">{sensorData?.mq2 ?? "--"}</p>
               </div>
             </div>
-            {sensorData?.mq2 && (
+            {sensorData?.mq2 !== undefined && (
               <div
                 className={cn(
                   "mt-3 text-sm",
-                  getGasLevel(sensorData.mq2).color
+                  getMQ2Level(sensorData.mq2).color
                 )}
               >
-                Level: {getGasLevel(sensorData.mq2).level}
+                {getMQ2Level(sensorData.mq2).level}
               </div>
             )}
           </div>
 
           {/* MQ135 Air Quality Card */}
-          <div className="rounded-2xl border bg-card p-6 shadow-sm">
+          <div
+            className={cn(
+              "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
+              sensorData?.mq135 && sensorData.mq135 > MQ135_MODERATE &&
+                "border-red-500 ring-2 ring-red-500/20"
+            )}
+          >
             <div className="flex items-center gap-3">
               <div className="rounded-xl bg-blue-500/10 p-3">
                 <Wind className="h-6 w-6 text-blue-500" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">MQ135 (Air)</p>
+                <p className="text-sm text-muted-foreground">MQ-135 (Air Quality)</p>
                 <p className="text-2xl font-bold">{sensorData?.mq135 ?? "--"}</p>
               </div>
             </div>
-            {sensorData?.mq135 && (
+            {sensorData?.mq135 !== undefined && (
               <div
                 className={cn(
                   "mt-3 text-sm",
-                  getGasLevel(sensorData.mq135).color
+                  getMQ135Level(sensorData.mq135).color
                 )}
               >
-                Level: {getGasLevel(sensorData.mq135).level}
+                {getMQ135Level(sensorData.mq135).level}
               </div>
             )}
           </div>
 
-          {/* IMU/Activity Card */}
+          {/* Calibration Status Card */}
           <div className="rounded-2xl border bg-card p-6 shadow-sm">
             <div className="flex items-center gap-3">
               <div className="rounded-xl bg-green-500/10 p-3">
                 <Activity className="h-6 w-6 text-green-500" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">BNO055 Temp</p>
-                <p
-                  className={cn(
-                    "text-2xl font-bold",
-                    sensorData?.bnoTemp && getTemperatureColor(sensorData.bnoTemp)
-                  )}
-                >
-                  {sensorData?.bnoTemp ?? "--"}°C
+                <p className="text-sm text-muted-foreground">IMU Status</p>
+                <p className="text-2xl font-bold">
+                  {sensorData?.calibration ? `${sensorData.calibration.sys}/3` : "--"}
                 </p>
               </div>
             </div>
             {sensorData?.calibration && (
               <div className="mt-3 text-sm text-muted-foreground">
-                Cal: Sys {sensorData.calibration.sys}/3
+                Gyro: {sensorData.calibration.gyro}/3 • Accel: {sensorData.calibration.accel}/3
               </div>
             )}
           </div>
@@ -372,24 +425,15 @@ export function CrisisDashboard() {
                 style={{ minHeight: 400 }}
               />
               
-              {!streaming && (
+              {!cameraReady && (
                 <div
                   className="absolute inset-0 flex items-center justify-center"
                   style={{ minHeight: 400 }}
                 >
-                  {connecting ? (
-                    <div className="flex flex-col items-center gap-4">
-                      <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-                      <p className="text-white">Initializing camera...</p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center gap-4 text-center">
-                      <Camera className="h-16 w-16 text-white/50" />
-                      <p className="text-white/70">
-                        Camera will activate when temperature exceeds {TEMP_THRESHOLD}°C
-                      </p>
-                    </div>
-                  )}
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                    <p className="text-white">Initializing camera...</p>
+                  </div>
                 </div>
               )}
             </div>
