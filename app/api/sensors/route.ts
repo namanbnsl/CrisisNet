@@ -58,8 +58,6 @@ export async function POST(req: Request) {
       timestamp: Date.now(),
     };
 
-    console.log(latestSensorData);
-
     return Response.json({ success: true });
   } catch (error) {
     console.error("POST /api/sensors error:", error);

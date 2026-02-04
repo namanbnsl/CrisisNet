@@ -39,7 +39,7 @@ const TEMP_THRESHOLD = 40; // DHT11 temperature threshold to trigger camera
 const MQ2_CLEAN = 300;
 const MQ2_LIGHT = 600;
 
-// MQ-135 Air Quality thresholds  
+// MQ-135 Air Quality thresholds
 const MQ135_GOOD = 400;
 const MQ135_MODERATE = 800;
 
@@ -48,7 +48,7 @@ export function CrisisDashboard() {
   const connectionRef = useRef<Awaited<
     ReturnType<typeof webrtc.useStream>
   > | null>(null);
-  
+
   const [sensorData, setSensorData] = useState<SensorData | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -56,13 +56,15 @@ export function CrisisDashboard() {
   const [fireDetected, setFireDetected] = useState(false);
   const [cameraVisible, setCameraVisible] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
-  const [alertLevel, setAlertLevel] = useState<"normal" | "warning" | "danger">("normal");
+  const [alertLevel, setAlertLevel] = useState<"normal" | "warning" | "danger">(
+    "normal",
+  );
 
   // Check if any prediction indicates fire
   const checkForFire = useCallback((preds: Prediction[]) => {
     const fireClasses = ["fire", "flame", "smoke", "Fire", "Flame", "Smoke"];
     const hasFire = preds.some(
-      (p) => fireClasses.includes(p.class) && p.confidence > 0.5
+      (p) => fireClasses.includes(p.class) && p.confidence > 0.5,
     );
     setFireDetected(hasFire);
     if (hasFire) {
@@ -76,15 +78,15 @@ export function CrisisDashboard() {
 
     const initCamera = async () => {
       if (connectionRef.current) return;
-      
+
       setConnecting(true);
-      
+
       try {
         const connector = connectors.withApiKey(
           process.env.NEXT_PUBLIC_ROBOFLOW_API_KEY!,
-          { serverUrl: "https://serverless.roboflow.com" }
+          { serverUrl: "https://serverless.roboflow.com" },
         );
-        
+
         const stream = await streams.useCamera({
           video: { facingMode: "environment" },
         });
@@ -116,7 +118,8 @@ export function CrisisDashboard() {
         if (!mounted) return;
 
         if (videoRef.current) {
-          videoRef.current.srcObject = await connectionRef.current.remoteStream();
+          videoRef.current.srcObject =
+            await connectionRef.current.remoteStream();
         }
         setStreaming(true);
         setCameraReady(true);
@@ -143,7 +146,7 @@ export function CrisisDashboard() {
         const data = await res.json();
         if (!data.error) {
           setSensorData(data);
-          
+
           // Check DHT11 temperature threshold - instantly reveal pre-loaded camera
           if (data.dhtTemp >= TEMP_THRESHOLD) {
             if (!cameraVisible) {
@@ -169,14 +172,18 @@ export function CrisisDashboard() {
   };
 
   const getMQ2Level = (value: number) => {
-    if (value > MQ2_LIGHT) return { level: "High smoke/gas", color: "text-red-500" };
-    if (value > MQ2_CLEAN) return { level: "Light smoke/gas", color: "text-orange-500" };
+    if (value > MQ2_LIGHT)
+      return { level: "High smoke/gas", color: "text-red-500" };
+    if (value > MQ2_CLEAN)
+      return { level: "Light smoke/gas", color: "text-orange-500" };
     return { level: "Clean air", color: "text-green-500" };
   };
 
   const getMQ135Level = (value: number) => {
-    if (value > MQ135_MODERATE) return { level: "Poor air", color: "text-red-500" };
-    if (value > MQ135_GOOD) return { level: "Moderate", color: "text-orange-500" };
+    if (value > MQ135_MODERATE)
+      return { level: "Poor air", color: "text-red-500" };
+    if (value > MQ135_GOOD)
+      return { level: "Moderate", color: "text-orange-500" };
     return { level: "Very good", color: "text-green-500" };
   };
 
@@ -186,7 +193,7 @@ export function CrisisDashboard() {
         "relative min-h-screen transition-colors duration-500",
         alertLevel === "danger" && "bg-red-950/20",
         alertLevel === "warning" && "bg-orange-950/10",
-        alertLevel === "normal" && "bg-background"
+        alertLevel === "normal" && "bg-background",
       )}
     >
       {/* Fire Alert Overlay */}
@@ -217,7 +224,7 @@ export function CrisisDashboard() {
               <div
                 className={cn(
                   "h-3 w-3 rounded-full",
-                  sensorData ? "animate-pulse bg-green-500" : "bg-gray-400"
+                  sensorData ? "animate-pulse bg-green-500" : "bg-gray-400",
                 )}
               />
               <span className="text-sm text-muted-foreground">
@@ -231,12 +238,16 @@ export function CrisisDashboard() {
                   cameraReady
                     ? "bg-green-500"
                     : connecting
-                    ? "animate-pulse bg-orange-500"
-                    : "bg-gray-400"
+                      ? "animate-pulse bg-orange-500"
+                      : "bg-gray-400",
                 )}
               />
               <span className="text-sm text-muted-foreground">
-                {cameraReady ? "Camera ready" : connecting ? "Loading camera..." : "Camera"}
+                {cameraReady
+                  ? "Camera ready"
+                  : connecting
+                    ? "Loading camera..."
+                    : "Camera"}
               </span>
             </div>
           </div>
@@ -248,8 +259,9 @@ export function CrisisDashboard() {
           <div
             className={cn(
               "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
-              sensorData?.dhtTemp && sensorData.dhtTemp >= TEMP_THRESHOLD &&
-                "border-red-500 ring-2 ring-red-500/20"
+              sensorData?.dhtTemp &&
+                sensorData.dhtTemp >= TEMP_THRESHOLD &&
+                "border-red-500 ring-2 ring-red-500/20",
             )}
           >
             <div className="flex items-center gap-3">
@@ -261,10 +273,14 @@ export function CrisisDashboard() {
                 <p
                   className={cn(
                     "text-2xl font-bold",
-                    sensorData?.dhtTemp && getTemperatureColor(sensorData.dhtTemp)
+                    sensorData?.dhtTemp &&
+                      getTemperatureColor(sensorData.dhtTemp),
                   )}
                 >
-                  {sensorData?.dhtTemp ?? "--"}°C
+                  {sensorData?.dhtTemp != null
+                    ? Math.round(sensorData.dhtTemp)
+                    : "--"}
+                  °C
                 </p>
               </div>
             </div>
@@ -280,8 +296,9 @@ export function CrisisDashboard() {
           <div
             className={cn(
               "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
-              sensorData?.mq2 && sensorData.mq2 > MQ2_LIGHT &&
-                "border-red-500 ring-2 ring-red-500/20"
+              sensorData?.mq2 &&
+                sensorData.mq2 > MQ2_LIGHT &&
+                "border-red-500 ring-2 ring-red-500/20",
             )}
           >
             <div className="flex items-center gap-3">
@@ -289,15 +306,19 @@ export function CrisisDashboard() {
                 <Wind className="h-6 w-6 text-purple-500" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">MQ-2 (Smoke/Gas)</p>
-                <p className="text-2xl font-bold">{sensorData?.mq2 ?? "--"}</p>
+                <p className="text-sm text-muted-foreground">
+                  MQ-2 (Smoke/Gas)
+                </p>
+                <p className="text-2xl font-bold">
+                  {sensorData?.mq2 != null ? Math.round(sensorData.mq2) : "--"}
+                </p>
               </div>
             </div>
             {sensorData?.mq2 !== undefined && (
               <div
                 className={cn(
                   "mt-3 text-sm",
-                  getMQ2Level(sensorData.mq2).color
+                  getMQ2Level(sensorData.mq2).color,
                 )}
               >
                 {getMQ2Level(sensorData.mq2).level}
@@ -309,8 +330,9 @@ export function CrisisDashboard() {
           <div
             className={cn(
               "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
-              sensorData?.mq135 && sensorData.mq135 > MQ135_MODERATE &&
-                "border-red-500 ring-2 ring-red-500/20"
+              sensorData?.mq135 &&
+                sensorData.mq135 > MQ135_MODERATE &&
+                "border-red-500 ring-2 ring-red-500/20",
             )}
           >
             <div className="flex items-center gap-3">
@@ -318,15 +340,21 @@ export function CrisisDashboard() {
                 <Wind className="h-6 w-6 text-blue-500" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">MQ-135 (Air Quality)</p>
-                <p className="text-2xl font-bold">{sensorData?.mq135 ?? "--"}</p>
+                <p className="text-sm text-muted-foreground">
+                  MQ-135 (Air Quality)
+                </p>
+                <p className="text-2xl font-bold">
+                  {sensorData?.mq135 != null
+                    ? Math.round(sensorData.mq135)
+                    : "--"}
+                </p>
               </div>
             </div>
             {sensorData?.mq135 !== undefined && (
               <div
                 className={cn(
                   "mt-3 text-sm",
-                  getMQ135Level(sensorData.mq135).color
+                  getMQ135Level(sensorData.mq135).color,
                 )}
               >
                 {getMQ135Level(sensorData.mq135).level}
@@ -335,33 +363,13 @@ export function CrisisDashboard() {
           </div>
 
           {/* Calibration Status Card */}
-          <div className="rounded-2xl border bg-card p-6 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-green-500/10 p-3">
-                <Activity className="h-6 w-6 text-green-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">IMU Status</p>
-                <p className="text-2xl font-bold">
-                  {sensorData?.calibration ? `${sensorData.calibration.sys}/3` : "--"}
-                </p>
-              </div>
-            </div>
-            {sensorData?.calibration && (
-              <div className="mt-3 text-sm text-muted-foreground">
-                Gyro: {sensorData.calibration.gyro}/3 • Accel: {sensorData.calibration.accel}/3
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Camera Feed Section */}
         <div
           className={cn(
             "overflow-hidden transition-all duration-700 ease-out",
-            cameraVisible
-              ? "max-h-[800px] opacity-100"
-              : "max-h-0 opacity-0"
+            cameraVisible ? "max-h-[800px] opacity-100" : "max-h-0 opacity-0",
           )}
         >
           <div className="rounded-3xl border bg-card p-6 shadow-lg">
@@ -370,13 +378,13 @@ export function CrisisDashboard() {
                 <div
                   className={cn(
                     "rounded-xl p-3",
-                    fireDetected ? "bg-red-500/20" : "bg-primary/10"
+                    fireDetected ? "bg-red-500/20" : "bg-primary/10",
                   )}
                 >
                   <Camera
                     className={cn(
                       "h-6 w-6",
-                      fireDetected ? "text-red-500" : "text-primary"
+                      fireDetected ? "text-red-500" : "text-primary",
                     )}
                   />
                 </div>
@@ -386,8 +394,8 @@ export function CrisisDashboard() {
                     {connecting
                       ? "Connecting to camera..."
                       : streaming
-                      ? `Detecting ${predictions.length} objects`
-                      : "Camera ready"}
+                        ? `Detecting ${predictions.length} objects`
+                        : "Camera ready"}
                   </p>
                 </div>
               </div>
@@ -403,8 +411,8 @@ export function CrisisDashboard() {
                     streaming
                       ? "bg-green-500/10 text-green-500"
                       : connecting
-                      ? "bg-orange-500/10 text-orange-500"
-                      : "bg-secondary text-muted-foreground"
+                        ? "bg-orange-500/10 text-orange-500"
+                        : "bg-secondary text-muted-foreground",
                   )}
                 >
                   {connecting ? "Connecting..." : streaming ? "Live" : "Ready"}
@@ -420,11 +428,11 @@ export function CrisisDashboard() {
                 muted
                 className={cn(
                   "h-auto w-full transition-opacity duration-500",
-                  streaming ? "opacity-100" : "opacity-0"
+                  streaming ? "opacity-100" : "opacity-0",
                 )}
                 style={{ minHeight: 400 }}
               />
-              
+
               {!cameraReady && (
                 <div
                   className="absolute inset-0 flex items-center justify-center"
@@ -450,7 +458,7 @@ export function CrisisDashboard() {
                         pred.class.toLowerCase().includes("flame") ||
                         pred.class.toLowerCase().includes("smoke")
                         ? "bg-red-500/20 text-red-400"
-                        : "bg-secondary text-foreground"
+                        : "bg-secondary text-foreground",
                     )}
                   >
                     {pred.class}: {Math.round(pred.confidence * 100)}%
