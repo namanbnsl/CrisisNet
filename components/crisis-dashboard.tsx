@@ -118,10 +118,6 @@ export function CrisisDashboard() {
 
         if (!mounted) return;
 
-        if (videoRef.current) {
-          videoRef.current.srcObject =
-            await connectionRef.current.remoteStream();
-        }
         setStreaming(true);
         setCameraReady(true);
       } catch (error) {
@@ -138,6 +134,20 @@ export function CrisisDashboard() {
       connectionRef.current?.cleanup();
     };
   }, [checkForFire]);
+
+  // Attach stream to video element when it becomes visible
+  useEffect(() => {
+    const attachStream = async () => {
+      if (cameraVisible && videoRef.current && connectionRef.current) {
+        try {
+          videoRef.current.srcObject = await connectionRef.current.remoteStream();
+        } catch (error) {
+          console.error("Failed to attach stream:", error);
+        }
+      }
+    };
+    attachStream();
+  }, [cameraVisible]);
 
   // Poll sensor data
   useEffect(() => {
@@ -254,284 +264,289 @@ export function CrisisDashboard() {
           </div>
         </div>
 
-        {/* Sensor Cards Grid */}
-        <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {/* Temperature Card */}
-          <div
-            className={cn(
-              "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
-              sensorData?.dhtTemp &&
-                sensorData.dhtTemp >= TEMP_THRESHOLD &&
-                "border-red-500 ring-2 ring-red-500/20",
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-orange-500/10 p-3">
-                <Thermometer className="h-6 w-6 text-orange-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Temperature</p>
-                <p
-                  className={cn(
-                    "text-2xl font-bold",
-                    sensorData?.dhtTemp &&
-                      getTemperatureColor(sensorData.dhtTemp),
-                  )}
-                >
-                  {sensorData?.dhtTemp != null
-                    ? Math.round(sensorData.dhtTemp)
-                    : "--"}
-                  °C
-                </p>
-              </div>
-            </div>
-            {sensorData?.dhtTemp && sensorData.dhtTemp >= TEMP_THRESHOLD && (
-              <div className="mt-3 flex items-center gap-2 text-sm text-red-500">
-                <AlertTriangle className="h-4 w-4" />
-                <span>Threshold exceeded!</span>
-              </div>
-            )}
-          </div>
-
-          {/* MQ2 Gas Sensor Card */}
-          <div
-            className={cn(
-              "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
-              sensorData?.mq2 &&
-                sensorData.mq2 > MQ2_LIGHT &&
-                "border-red-500 ring-2 ring-red-500/20",
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-purple-500/10 p-3">
-                <Wind className="h-6 w-6 text-purple-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">
-                  MQ-2 (Smoke/Gas)
-                </p>
-                <p className="text-2xl font-bold">
-                  {sensorData?.mq2 != null ? Math.round(sensorData.mq2) : "--"}
-                </p>
-              </div>
-            </div>
-            {sensorData?.mq2 !== undefined && (
+        {/* Main Two-Column Layout: Sensors Left, Video Right */}
+        <div className="grid gap-8 lg:grid-cols-2">
+          {/* Left Column: Sensor Details */}
+          <div className="space-y-6">
+            {/* Sensor Cards Grid */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              {/* Temperature Card */}
               <div
                 className={cn(
-                  "mt-3 text-sm",
-                  getMQ2Level(sensorData.mq2).color,
+                  "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
+                  sensorData?.dhtTemp &&
+                    sensorData.dhtTemp >= TEMP_THRESHOLD &&
+                    "border-red-500 ring-2 ring-red-500/20",
                 )}
               >
-                {getMQ2Level(sensorData.mq2).level}
-              </div>
-            )}
-          </div>
-
-          {/* MQ135 Air Quality Card */}
-          <div
-            className={cn(
-              "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
-              sensorData?.mq135 &&
-                sensorData.mq135 > MQ135_MODERATE &&
-                "border-red-500 ring-2 ring-red-500/20",
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-blue-500/10 p-3">
-                <Wind className="h-6 w-6 text-blue-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">
-                  MQ-135 (Air Quality)
-                </p>
-                <p className="text-2xl font-bold">
-                  {sensorData?.mq135 != null
-                    ? Math.round(sensorData.mq135)
-                    : "--"}
-                </p>
-              </div>
-            </div>
-            {sensorData?.mq135 !== undefined && (
-              <div
-                className={cn(
-                  "mt-3 text-sm",
-                  getMQ135Level(sensorData.mq135).color,
-                )}
-              >
-                {getMQ135Level(sensorData.mq135).level}
-              </div>
-            )}
-          </div>
-
-          {/* Location Map Card */}
-          <LocationMap />
-        </div>
-
-        {/* Camera Feed Section */}
-        <div
-          className={cn(
-            "overflow-hidden transition-all duration-700 ease-out",
-            cameraVisible ? "max-h-[800px] opacity-100" : "max-h-0 opacity-0",
-          )}
-        >
-          <div className="rounded-3xl border bg-card p-6 shadow-lg">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div
-                  className={cn(
-                    "rounded-xl p-3",
-                    fireDetected ? "bg-red-500/20" : "bg-primary/10",
-                  )}
-                >
-                  <Camera
-                    className={cn(
-                      "h-6 w-6",
-                      fireDetected ? "text-red-500" : "text-primary",
-                    )}
-                  />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold">Live Detection Feed</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {connecting
-                      ? "Connecting to camera..."
-                      : streaming
-                        ? `Detecting ${predictions.length} objects`
-                        : "Camera ready"}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                {fireDetected && (
-                  <span className="animate-pulse rounded-full bg-red-500 px-4 py-1.5 text-sm font-medium text-white">
-                    🔥 Fire Detected
-                  </span>
-                )}
-                <span
-                  className={cn(
-                    "rounded-full px-4 py-1.5 text-sm",
-                    streaming
-                      ? "bg-green-500/10 text-green-500"
-                      : connecting
-                        ? "bg-orange-500/10 text-orange-500"
-                        : "bg-secondary text-muted-foreground",
-                  )}
-                >
-                  {connecting ? "Connecting..." : streaming ? "Live" : "Ready"}
-                </span>
-              </div>
-            </div>
-
-            <div className="relative overflow-hidden rounded-2xl bg-black">
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className={cn(
-                  "h-auto w-full transition-opacity duration-500",
-                  streaming ? "opacity-100" : "opacity-0",
-                )}
-                style={{ minHeight: 400 }}
-              />
-
-              {!cameraReady && (
-                <div
-                  className="absolute inset-0 flex items-center justify-center"
-                  style={{ minHeight: 400 }}
-                >
-                  <div className="flex flex-col items-center gap-4">
-                    <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-                    <p className="text-white">Initializing camera...</p>
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl bg-orange-500/10 p-3">
+                    <Thermometer className="h-6 w-6 text-orange-500" />
                   </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Temperature</p>
+                    <p
+                      className={cn(
+                        "text-2xl font-bold",
+                        sensorData?.dhtTemp &&
+                          getTemperatureColor(sensorData.dhtTemp),
+                      )}
+                    >
+                      {sensorData?.dhtTemp != null
+                        ? Math.round(sensorData.dhtTemp)
+                        : "--"}
+                      °C
+                    </p>
+                  </div>
+                </div>
+                {sensorData?.dhtTemp && sensorData.dhtTemp >= TEMP_THRESHOLD && (
+                  <div className="mt-3 flex items-center gap-2 text-sm text-red-500">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>Threshold exceeded!</span>
+                  </div>
+                )}
+              </div>
+
+              {/* MQ2 Gas Sensor Card */}
+              <div
+                className={cn(
+                  "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
+                  sensorData?.mq2 &&
+                    sensorData.mq2 > MQ2_LIGHT &&
+                    "border-red-500 ring-2 ring-red-500/20",
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl bg-purple-500/10 p-3">
+                    <Wind className="h-6 w-6 text-purple-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      MQ-2 (Smoke/Gas)
+                    </p>
+                    <p className="text-2xl font-bold">
+                      {sensorData?.mq2 != null ? Math.round(sensorData.mq2) : "--"}
+                    </p>
+                  </div>
+                </div>
+                {sensorData?.mq2 !== undefined && (
+                  <div
+                    className={cn(
+                      "mt-3 text-sm",
+                      getMQ2Level(sensorData.mq2).color,
+                    )}
+                  >
+                    {getMQ2Level(sensorData.mq2).level}
+                  </div>
+                )}
+              </div>
+
+              {/* MQ135 Air Quality Card */}
+              <div
+                className={cn(
+                  "rounded-2xl border bg-card p-6 shadow-sm transition-all duration-300",
+                  sensorData?.mq135 &&
+                    sensorData.mq135 > MQ135_MODERATE &&
+                    "border-red-500 ring-2 ring-red-500/20",
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl bg-blue-500/10 p-3">
+                    <Wind className="h-6 w-6 text-blue-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      MQ-135 (Air Quality)
+                    </p>
+                    <p className="text-2xl font-bold">
+                      {sensorData?.mq135 != null
+                        ? Math.round(sensorData.mq135)
+                        : "--"}
+                    </p>
+                  </div>
+                </div>
+                {sensorData?.mq135 !== undefined && (
+                  <div
+                    className={cn(
+                      "mt-3 text-sm",
+                      getMQ135Level(sensorData.mq135).color,
+                    )}
+                  >
+                    {getMQ135Level(sensorData.mq135).level}
+                  </div>
+                )}
+              </div>
+
+              {/* Location Map Card */}
+              <LocationMap />
+            </div>
+
+            {/* IMU Data Details */}
+            {sensorData && (
+              <div className="grid gap-4 sm:grid-cols-3">
+                {/* Orientation */}
+                <div className="rounded-2xl border bg-card p-6 shadow-sm">
+                  <h3 className="mb-4 font-semibold">Orientation</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">X (Heading)</span>
+                      <span>{sensorData.orientation.x.toFixed(2)}°</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Y (Roll)</span>
+                      <span>{sensorData.orientation.y.toFixed(2)}°</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Z (Pitch)</span>
+                      <span>{sensorData.orientation.z.toFixed(2)}°</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Accelerometer */}
+                <div className="rounded-2xl border bg-card p-6 shadow-sm">
+                  <h3 className="mb-4 font-semibold">Accelerometer</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">X</span>
+                      <span>{sensorData.accel.x.toFixed(2)} m/s²</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Y</span>
+                      <span>{sensorData.accel.y.toFixed(2)} m/s²</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Z</span>
+                      <span>{sensorData.accel.z.toFixed(2)} m/s²</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Gyroscope */}
+                <div className="rounded-2xl border bg-card p-6 shadow-sm">
+                  <h3 className="mb-4 font-semibold">Gyroscope</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">X</span>
+                      <span>{sensorData.gyro.x.toFixed(2)} rad/s</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Y</span>
+                      <span>{sensorData.gyro.y.toFixed(2)} rad/s</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Z</span>
+                      <span>{sensorData.gyro.z.toFixed(2)} rad/s</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right Column: Camera Feed - Hidden until threshold exceeded */}
+          {cameraVisible && (
+          <div
+            className="overflow-hidden transition-all duration-700 ease-out animate-in fade-in slide-in-from-right"
+          >
+            <div className="rounded-3xl border bg-card p-6 shadow-lg h-full">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={cn(
+                      "rounded-xl p-3",
+                      fireDetected ? "bg-red-500/20" : "bg-primary/10",
+                    )}
+                  >
+                    <Camera
+                      className={cn(
+                        "h-6 w-6",
+                        fireDetected ? "text-red-500" : "text-primary",
+                      )}
+                    />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold">Live Detection Feed</h2>
+                    <p className="text-sm text-muted-foreground">
+                      {connecting
+                        ? "Connecting to camera..."
+                        : streaming
+                          ? `Detecting ${predictions.length} objects`
+                          : "Camera ready"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {fireDetected && (
+                    <span className="animate-pulse rounded-full bg-red-500 px-4 py-1.5 text-sm font-medium text-white">
+                      🔥 Fire Detected
+                    </span>
+                  )}
+                  <span
+                    className={cn(
+                      "rounded-full px-4 py-1.5 text-sm",
+                      streaming
+                        ? "bg-green-500/10 text-green-500"
+                        : connecting
+                          ? "bg-orange-500/10 text-orange-500"
+                          : "bg-secondary text-muted-foreground",
+                    )}
+                  >
+                    {connecting ? "Connecting..." : streaming ? "Live" : "Ready"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="relative overflow-hidden rounded-2xl bg-black">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={cn(
+                    "h-auto w-full transition-opacity duration-500",
+                    streaming ? "opacity-100" : "opacity-0",
+                  )}
+                  style={{ minHeight: 300 }}
+                />
+
+                {!cameraReady && (
+                  <div
+                    className="absolute inset-0 flex items-center justify-center"
+                    style={{ minHeight: 300 }}
+                  >
+                    <div className="flex flex-col items-center gap-4">
+                      <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                      <p className="text-white">Initializing camera...</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Detection Stats */}
+              {streaming && predictions.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {predictions.map((pred, idx) => (
+                    <span
+                      key={idx}
+                      className={cn(
+                        "rounded-full px-3 py-1 text-sm",
+                        pred.class.toLowerCase().includes("fire") ||
+                          pred.class.toLowerCase().includes("flame") ||
+                          pred.class.toLowerCase().includes("smoke")
+                          ? "bg-red-500/20 text-red-400"
+                          : "bg-secondary text-foreground",
+                      )}
+                    >
+                      {pred.class}: {Math.round(pred.confidence * 100)}%
+                    </span>
+                  ))}
                 </div>
               )}
             </div>
-
-            {/* Detection Stats */}
-            {streaming && predictions.length > 0 && (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {predictions.map((pred, idx) => (
-                  <span
-                    key={idx}
-                    className={cn(
-                      "rounded-full px-3 py-1 text-sm",
-                      pred.class.toLowerCase().includes("fire") ||
-                        pred.class.toLowerCase().includes("flame") ||
-                        pred.class.toLowerCase().includes("smoke")
-                        ? "bg-red-500/20 text-red-400"
-                        : "bg-secondary text-foreground",
-                    )}
-                  >
-                    {pred.class}: {Math.round(pred.confidence * 100)}%
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
+          )}
         </div>
-
-        {/* IMU Data Details */}
-        {sensorData && (
-          <div className="mt-8 grid gap-4 sm:grid-cols-3">
-            {/* Orientation */}
-            <div className="rounded-2xl border bg-card p-6 shadow-sm">
-              <h3 className="mb-4 font-semibold">Orientation</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">X (Heading)</span>
-                  <span>{sensorData.orientation.x.toFixed(2)}°</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Y (Roll)</span>
-                  <span>{sensorData.orientation.y.toFixed(2)}°</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Z (Pitch)</span>
-                  <span>{sensorData.orientation.z.toFixed(2)}°</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Accelerometer */}
-            <div className="rounded-2xl border bg-card p-6 shadow-sm">
-              <h3 className="mb-4 font-semibold">Accelerometer</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">X</span>
-                  <span>{sensorData.accel.x.toFixed(2)} m/s²</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Y</span>
-                  <span>{sensorData.accel.y.toFixed(2)} m/s²</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Z</span>
-                  <span>{sensorData.accel.z.toFixed(2)} m/s²</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Gyroscope */}
-            <div className="rounded-2xl border bg-card p-6 shadow-sm">
-              <h3 className="mb-4 font-semibold">Gyroscope</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">X</span>
-                  <span>{sensorData.gyro.x.toFixed(2)} rad/s</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Y</span>
-                  <span>{sensorData.gyro.y.toFixed(2)} rad/s</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Z</span>
-                  <span>{sensorData.gyro.z.toFixed(2)} rad/s</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Footer Status */}
         <div className="mt-8 text-center text-sm text-muted-foreground">

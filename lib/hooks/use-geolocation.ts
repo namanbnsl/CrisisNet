@@ -50,20 +50,8 @@ export function useGeolocation() {
     navigator.geolocation.getCurrentPosition(successHandler, errorHandler, {
       enableHighAccuracy: true,
       timeout: 10000,
-      maximumAge: 60000,
+      maximumAge: Infinity, // Use cached position, don't refresh
     });
-
-    const watchId = navigator.geolocation.watchPosition(
-      successHandler,
-      errorHandler,
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 60000,
-      }
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
   return state;
