@@ -11,6 +11,7 @@ import {
   Flame,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LocationMap } from "@/components/location-map";
 
 type Prediction = {
   x: number;
@@ -362,7 +363,8 @@ export function CrisisDashboard() {
             )}
           </div>
 
-          {/* Calibration Status Card */}
+          {/* Location Map Card */}
+          <LocationMap />
         </div>
 
         {/* Camera Feed Section */}
