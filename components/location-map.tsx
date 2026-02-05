@@ -1,10 +1,15 @@
 "use client";
 
 import { MapPin, Navigation, Loader2 } from "lucide-react";
-import { useGeolocation } from "@/lib/hooks/use-geolocation";
+import { useGeolocation, type GeolocationState } from "@/lib/hooks/use-geolocation";
 
-export function LocationMap() {
-  const { latitude, longitude, accuracy, error, loading } = useGeolocation();
+type LocationMapProps = {
+  location?: GeolocationState;
+};
+
+export function LocationMap({ location }: LocationMapProps) {
+  const geo = location ?? useGeolocation();
+  const { latitude, longitude, accuracy, error, loading } = geo;
 
   const mapUrl =
     latitude && longitude

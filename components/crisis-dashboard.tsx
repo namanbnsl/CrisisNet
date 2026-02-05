@@ -1,14 +1,8 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect } from "react";
 import { connectors, webrtc, streams } from "@roboflow/inference-sdk";
-import {
-  Thermometer,
-  Wind,
-  AlertTriangle,
-  Camera,
-  Flame,
-} from "lucide-react";
+import { Thermometer, Wind, AlertTriangle, Camera, Flame } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LocationMap } from "@/components/location-map";
 import { useGeolocation } from "@/lib/hooks/use-geolocation";
@@ -20,6 +14,9 @@ type Prediction = {
   height: number;
   confidence: number;
   class: string;
+  class_name?: string;
+  className?: string;
+  label?: string;
 };
 
 type SensorData = {
@@ -43,6 +40,95 @@ const MQ2_LIGHT = 600;
 // MQ-135 Air Quality thresholds
 const MQ135_GOOD = 400;
 const MQ135_MODERATE = 800;
+const FIRE_CLASSES = new Set(["fire", "flame", "smoke"]);
+
+const normalizeClass = (value: unknown) => {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
+};
+
+const normalizeClassFromPrediction = (pred: Prediction) => {
+  return (
+    normalizeClass(pred.class) ||
+    normalizeClass(pred.class_name) ||
+    normalizeClass(pred.className) ||
+    normalizeClass(pred.label)
+  );
+};
+
+const extractPredictionsFromUnknown = (value: unknown): Prediction[] => {
+  if (!value || typeof value !== "object") return [];
+
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.predictions)) {
+    return record.predictions as Prediction[];
+  }
+
+  if (record.predictions && typeof record.predictions === "object") {
+    const preds = extractPredictionsFromUnknown(record.predictions);
+    if (preds.length) return preds;
+  }
+
+  if (Array.isArray(record.outputs)) {
+    for (const item of record.outputs) {
+      const preds = extractPredictionsFromUnknown(item);
+      if (preds.length) return preds;
+    }
+  }
+
+  if (record.output) {
+    const preds = extractPredictionsFromUnknown(record.output);
+    if (preds.length) return preds;
+  }
+
+  return [];
+};
+
+const extractPredictions = (data: Record<string, unknown>): Prediction[] => {
+  if (Array.isArray(data.predictions)) return data.predictions as Prediction[];
+
+  const output = data.output as Record<string, unknown> | undefined;
+  if (output && Array.isArray(output.predictions)) {
+    return output.predictions as Prediction[];
+  }
+
+  const outputs = data.outputs as unknown;
+  if (Array.isArray(outputs)) {
+    for (const item of outputs) {
+      if (
+        item &&
+        typeof item === "object" &&
+        Array.isArray((item as Record<string, unknown>).predictions)
+      ) {
+        return (item as Record<string, unknown>).predictions as Prediction[];
+      }
+    }
+  }
+
+  if (outputs && typeof outputs === "object") {
+    const outputsObj = outputs as Record<string, unknown>;
+    if (Array.isArray(outputsObj.predictions)) {
+      return outputsObj.predictions as Prediction[];
+    }
+  }
+
+  if (data.serialized_output_data) {
+    if (typeof data.serialized_output_data === "string") {
+      try {
+        const parsed = JSON.parse(data.serialized_output_data) as unknown;
+        const preds = extractPredictionsFromUnknown(parsed);
+        if (preds.length) return preds;
+      } catch (error) {
+        console.warn("Failed to parse serialized_output_data", error);
+      }
+    } else {
+      const preds = extractPredictionsFromUnknown(data.serialized_output_data);
+      if (preds.length) return preds;
+    }
+  }
+
+  return extractPredictionsFromUnknown(data);
+};
 
 export function CrisisDashboard() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -50,21 +136,31 @@ export function CrisisDashboard() {
     ReturnType<typeof webrtc.useStream>
   > | null>(null);
 
-  const { latitude, longitude } = useGeolocation();
+  const { latitude, longitude, accuracy, error, loading } = useGeolocation();
   const [sensorData, setSensorData] = useState<SensorData | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
-  const [fireDetected, setFireDetected] = useState(false);
+  const [lastPayloadKeys, setLastPayloadKeys] = useState<string[]>([]);
+  const [lastPayloadSize, setLastPayloadSize] = useState(0);
   const [cameraVisible, setCameraVisible] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
-  const [alertLevel, setAlertLevel] = useState<"normal" | "warning" | "danger">(
-    "normal",
-  );
-  const [alertSent, setAlertSent] = useState(false); // bluesky
+  const [alertSent, setAlertSent] = useState(false);
+  const [pendingAlert, setPendingAlert] = useState(false);
+  const [queuedForLocation, setQueuedForLocation] = useState(false);
+  const [alertError, setAlertError] = useState<string | null>(null);
   const alertSentRef = useRef(false);
+  const alertInFlightRef = useRef(false);
+  const pendingAlertRef = useRef(false);
+  const pendingImageRef = useRef<string | null>(null);
+  const fireDetected = predictions.some((p) =>
+    FIRE_CLASSES.has(normalizeClassFromPrediction(p)),
+  );
+  const alertLevel: "normal" | "warning" | "danger" = fireDetected
+    ? "danger"
+    : "normal";
 
-  const captureFrame = useCallback(() => {
+  const captureFrame = () => {
     if (!videoRef.current) return null;
     const canvas = document.createElement("canvas");
     canvas.width = videoRef.current.videoWidth;
@@ -73,31 +169,78 @@ export function CrisisDashboard() {
     if (!ctx) return null;
     ctx.drawImage(videoRef.current, 0, 0);
     return canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
-  }, []);
+  };
 
+  const hasLocation =
+    typeof latitude === "number" &&
+    typeof longitude === "number" &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude);
 
-  const sendFireAlert = useCallback(
-    async (image: string | null) => {
-      if (!latitude || !longitude) return;
-      try {
-        await fetch("/api/fire-detection", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            lat: latitude,
-            lng: longitude,
-            radiusKm: 50,
-            image,
-          }),
-        });
-      } catch (error) {
-        console.error("Failed to send fire alert:", error);
-        alertSentRef.current = false;
-        setAlertSent(false);
+  const sendFireAlert = async (image: string | null) => {
+    try {
+      if (alertInFlightRef.current) return false;
+      alertInFlightRef.current = true;
+      setAlertError(null);
+      setPendingAlert(true);
+      setQueuedForLocation(false);
+      const response = await fetch("/api/fire-detection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lat: hasLocation ? latitude : undefined,
+          lng: hasLocation ? longitude : undefined,
+          radiusKm: 50,
+          image,
+        }),
+      });
+      if (!response.ok) {
+        const message = await response.text().catch(() => "");
+        console.error("Fire alert failed:", response.status, message);
+        setAlertError(
+          message
+            ? `Failed: ${response.status} ${message}`
+            : `Failed: ${response.status}`,
+        );
+        setPendingAlert(false);
+        alertInFlightRef.current = false;
+        return false;
       }
-    },
-    [latitude, longitude],
-  );
+      setPendingAlert(false);
+      setQueuedForLocation(false);
+      alertInFlightRef.current = false;
+      return true;
+    } catch (error) {
+      console.error("Failed to send fire alert:", error);
+      setAlertError("Network error while sending alert.");
+      setPendingAlert(false);
+      setQueuedForLocation(false);
+      alertInFlightRef.current = false;
+      return false;
+    }
+  };
+
+  const queueOrSendAlert = async (image: string | null) => {
+    if (alertSentRef.current) return false;
+    if (!hasLocation) {
+      pendingAlertRef.current = true;
+      pendingImageRef.current = image;
+      setPendingAlert(true);
+      setQueuedForLocation(true);
+      return false;
+    }
+    pendingAlertRef.current = false;
+    setQueuedForLocation(false);
+    const ok = await sendFireAlert(image);
+    if (ok) {
+      alertSentRef.current = true;
+      setAlertSent(true);
+    } else {
+      alertSentRef.current = false;
+      setAlertSent(false);
+    }
+    return ok;
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -132,21 +275,27 @@ export function CrisisDashboard() {
             requestedRegion: "ap",
           },
           onData: (data) => {
+            if (!cameraVisible) return;
             const dataObj = data as unknown as Record<string, unknown>;
-            if (dataObj?.predictions && Array.isArray(dataObj.predictions)) {
-              const preds = dataObj.predictions as Prediction[];
-              setPredictions(preds);
+            setLastPayloadKeys(Object.keys(dataObj));
+            setLastPayloadSize(JSON.stringify(dataObj).length);
+            const rawPreds = extractPredictions(dataObj);
+            if (!rawPreds.length) {
+              setPredictions([]);
+              return;
+            }
 
-              console.log("Predictions:", preds);
+            const preds = rawPreds.map((pred) => ({
+              ...pred,
+              class: normalizeClassFromPrediction(pred),
+            }));
 
-              const fireClasses = ["fire"];
-              const hasFire = preds.some((p) => fireClasses.includes(p.class));
-              setFireDetected(hasFire);
-              if (hasFire && !alertSentRef.current) {
-                alertSentRef.current = true;
-                setAlertSent(true);
-                setAlertLevel("danger");
-              }
+            setPredictions(preds);
+
+            const hasFire = preds.some((p) => FIRE_CLASSES.has(p.class));
+            if (hasFire && !alertSentRef.current && !alertInFlightRef.current) {
+              const frame = captureFrame();
+              queueOrSendAlert(frame);
             }
           },
         });
@@ -184,31 +333,15 @@ export function CrisisDashboard() {
     attachStream();
   }, [cameraVisible]);
 
-  // Send fire alert when fire is detected (with 10s delay for sensor-triggered alerts)
-  const alertSendingRef = useRef(false);
-  const sensorTriggeredRef = useRef(false);
   useEffect(() => {
-    if (
-      fireDetected &&
-      alertSentRef.current &&
-      !alertSendingRef.current &&
-      latitude &&
-      longitude
-    ) {
-      alertSendingRef.current = true;
-
-      const sendAlert = () => {
-        const frame = captureFrame();
-        sendFireAlert(frame);
-      };
-
-      if (sensorTriggeredRef.current) {
-        setTimeout(sendAlert, 10000);
-      } else {
-        sendAlert();
-      }
-    }
-  }, [fireDetected, latitude, longitude, captureFrame, sendFireAlert]);
+    if (!pendingAlertRef.current) return;
+    if (!hasLocation) return;
+    if (alertSentRef.current || alertInFlightRef.current) return;
+    const frame = pendingImageRef.current ?? captureFrame();
+    pendingAlertRef.current = false;
+    pendingImageRef.current = null;
+    queueOrSendAlert(frame);
+  }, [hasLocation, pendingAlert]);
 
   // Poll sensor data
   useEffect(() => {
@@ -219,19 +352,8 @@ export function CrisisDashboard() {
         if (!data.error) {
           setSensorData(data);
 
-          // Check DHT11 temperature threshold - trigger fire alert
-          if (data.dhtTemp >= TEMP_THRESHOLD) {
-            if (!cameraVisible) {
-              setCameraVisible(true);
-            }
-            if (!alertSentRef.current && cameraReady) {
-              sensorTriggeredRef.current = true;
-              alertSentRef.current = true;
-              setFireDetected(true);
-              setAlertLevel("danger");
-              setAlertSent(true);
-            }
-          }
+          // Check DHT11 temperature threshold - reveal camera feed
+          setCameraVisible((prev) => prev || data.dhtTemp >= TEMP_THRESHOLD);
         }
       } catch (error) {
         console.error("Failed to fetch sensor data:", error);
@@ -241,7 +363,7 @@ export function CrisisDashboard() {
     fetchSensorData();
     const interval = setInterval(fetchSensorData, 1000); // every second
     return () => clearInterval(interval);
-  }, [cameraVisible, cameraReady]);
+  }, [cameraVisible]);
 
   const getTemperatureColor = (temp: number) => {
     if (temp >= TEMP_THRESHOLD) return "text-red-500";
@@ -270,7 +392,6 @@ export function CrisisDashboard() {
       className={cn(
         "relative min-h-screen transition-colors duration-500",
         alertLevel === "danger" && "bg-red-950/20",
-        alertLevel === "warning" && "bg-orange-950/10",
         alertLevel === "normal" && "bg-background",
       )}
     >
@@ -447,7 +568,9 @@ export function CrisisDashboard() {
               </div>
 
               {/* Location Map Card */}
-              <LocationMap />
+              <LocationMap
+                location={{ latitude, longitude, accuracy, error, loading }}
+              />
             </div>
 
             {/* IMU Data Details */}
@@ -548,10 +671,9 @@ export function CrisisDashboard() {
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => {
-                        setFireDetected(true);
-                        setAlertLevel("danger");
+                        if (!fireDetected || alertSent) return;
                         const frame = captureFrame();
-                        sendFireAlert(frame);
+                        queueOrSendAlert(frame);
                       }}
                       disabled={alertSent}
                       className={cn(
@@ -561,7 +683,13 @@ export function CrisisDashboard() {
                           : "bg-red-600 text-white hover:bg-red-700",
                       )}
                     >
-                      {alertSent ? "Alert Sent" : "🚨 Report Fire"}
+                      {alertSent
+                        ? "Alert Sent"
+                        : pendingAlert
+                          ? queuedForLocation
+                            ? "Queued..."
+                            : "Sending..."
+                          : "🚨 Report Fire"}
                     </button>
                     <span
                       className={cn(
@@ -607,6 +735,12 @@ export function CrisisDashboard() {
                     </div>
                   )}
                 </div>
+
+                {alertError && (
+                  <div className="mt-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                    {alertError}
+                  </div>
+                )}
 
                 {/* Detection Stats */}
                 {streaming && predictions.length > 0 && (
