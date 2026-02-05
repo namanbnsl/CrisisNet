@@ -1,10 +1,10 @@
-let latestSensorData: any = null;
+let latestSensorData: any;
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // ---- Basic validation ----
+    // basic validation (check if each is a number and they exist)
     if (
       typeof body.mq2 !== "number" ||
       typeof body.mq135 !== "number" ||
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
       typeof body.bnoTemp !== "number"
     ) {
       return new Response(JSON.stringify({ error: "Invalid sensor values" }), {
-        status: 400,
+        status: 400, // bad request
       });
     }
 
@@ -22,7 +22,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // ---- Store latest data (RAM) ----
     latestSensorData = {
       mq2: body.mq2,
       mq135: body.mq135,
@@ -58,7 +57,7 @@ export async function POST(req: Request) {
       timestamp: Date.now(),
     };
 
-    return Response.json({ success: true });
+    return Response.json({ success: true }); // 200
   } catch (error) {
     console.error("POST /api/sensors error:", error);
     return new Response(JSON.stringify({ error: "Server error" }), {

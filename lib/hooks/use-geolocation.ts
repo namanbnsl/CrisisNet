@@ -50,7 +50,6 @@ export function useGeolocation() {
     navigator.geolocation.getCurrentPosition(successHandler, errorHandler, {
       enableHighAccuracy: true,
       timeout: 10000,
-      maximumAge: Infinity, // Use cached position, don't refresh
     });
   }, []);
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { MapPin, Navigation, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useGeolocation } from "@/lib/hooks/use-geolocation";
 
 export function LocationMap() {
@@ -21,11 +20,7 @@ export function LocationMap() {
         <div>
           <h3 className="font-semibold">Your Location</h3>
           <p className="text-sm text-muted-foreground">
-            {loading
-              ? "Getting location..."
-              : error
-                ? "Location unavailable"
-                : "Live GPS tracking"}
+            {loading ? "Getting location..." : error && "Location unavailable"}
           </p>
         </div>
         {!loading && !error && (

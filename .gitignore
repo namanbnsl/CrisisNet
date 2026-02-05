@@ -41,5 +41,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-demo.md
-fake-sensor.js
+# used only for testing purposes without using hardware everytime
+fake-sensor.js 

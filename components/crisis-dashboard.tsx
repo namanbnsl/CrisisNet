@@ -5,13 +5,13 @@ import { connectors, webrtc, streams } from "@roboflow/inference-sdk";
 import {
   Thermometer,
   Wind,
-  Activity,
   AlertTriangle,
   Camera,
   Flame,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LocationMap } from "@/components/location-map";
+import { useGeolocation } from "@/lib/hooks/use-geolocation";
 
 type Prediction = {
   x: number;
@@ -50,6 +50,7 @@ export function CrisisDashboard() {
     ReturnType<typeof webrtc.useStream>
   > | null>(null);
 
+  const { latitude, longitude } = useGeolocation();
   const [sensorData, setSensorData] = useState<SensorData | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -60,20 +61,44 @@ export function CrisisDashboard() {
   const [alertLevel, setAlertLevel] = useState<"normal" | "warning" | "danger">(
     "normal",
   );
+  const [alertSent, setAlertSent] = useState(false); // bluesky
+  const alertSentRef = useRef(false);
 
-  // Check if any prediction indicates fire
-  const checkForFire = useCallback((preds: Prediction[]) => {
-    const fireClasses = ["fire", "flame", "smoke", "Fire", "Flame", "Smoke"];
-    const hasFire = preds.some(
-      (p) => fireClasses.includes(p.class) && p.confidence > 0.5,
-    );
-    setFireDetected(hasFire);
-    if (hasFire) {
-      setAlertLevel("danger");
-    }
+  const captureFrame = useCallback(() => {
+    if (!videoRef.current) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(videoRef.current, 0, 0);
+    return canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
   }, []);
 
-  // Pre-initialize camera on mount for instant reveal
+
+  const sendFireAlert = useCallback(
+    async (image: string | null) => {
+      if (!latitude || !longitude) return;
+      try {
+        await fetch("/api/fire-detection", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lat: latitude,
+            lng: longitude,
+            radiusKm: 50,
+            image,
+          }),
+        });
+      } catch (error) {
+        console.error("Failed to send fire alert:", error);
+        alertSentRef.current = false;
+        setAlertSent(false);
+      }
+    },
+    [latitude, longitude],
+  );
+
   useEffect(() => {
     let mounted = true;
 
@@ -103,15 +128,25 @@ export function CrisisDashboard() {
             streamOutputNames: ["output_image"],
             dataOutputNames: ["predictions"],
             processingTimeout: 600,
-            requestedPlan: "webrtc-gpu-medium", // Options: webrtc-gpu-small, webrtc-gpu-medium, webrtc-gpu-large
-            requestedRegion: "us", // Options: us, eu, ap
+            requestedPlan: "webrtc-gpu-medium",
+            requestedRegion: "ap",
           },
           onData: (data) => {
             const dataObj = data as unknown as Record<string, unknown>;
             if (dataObj?.predictions && Array.isArray(dataObj.predictions)) {
               const preds = dataObj.predictions as Prediction[];
               setPredictions(preds);
-              checkForFire(preds);
+
+              console.log("Predictions:", preds);
+
+              const fireClasses = ["fire"];
+              const hasFire = preds.some((p) => fireClasses.includes(p.class));
+              setFireDetected(hasFire);
+              if (hasFire && !alertSentRef.current) {
+                alertSentRef.current = true;
+                setAlertSent(true);
+                setAlertLevel("danger");
+              }
             }
           },
         });
@@ -133,14 +168,14 @@ export function CrisisDashboard() {
       mounted = false;
       connectionRef.current?.cleanup();
     };
-  }, [checkForFire]);
+  }, []);
 
-  // Attach stream to video element when it becomes visible
   useEffect(() => {
     const attachStream = async () => {
       if (cameraVisible && videoRef.current && connectionRef.current) {
         try {
-          videoRef.current.srcObject = await connectionRef.current.remoteStream();
+          videoRef.current.srcObject =
+            await connectionRef.current.remoteStream();
         } catch (error) {
           console.error("Failed to attach stream:", error);
         }
@@ -148,6 +183,32 @@ export function CrisisDashboard() {
     };
     attachStream();
   }, [cameraVisible]);
+
+  // Send fire alert when fire is detected (with 10s delay for sensor-triggered alerts)
+  const alertSendingRef = useRef(false);
+  const sensorTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (
+      fireDetected &&
+      alertSentRef.current &&
+      !alertSendingRef.current &&
+      latitude &&
+      longitude
+    ) {
+      alertSendingRef.current = true;
+
+      const sendAlert = () => {
+        const frame = captureFrame();
+        sendFireAlert(frame);
+      };
+
+      if (sensorTriggeredRef.current) {
+        setTimeout(sendAlert, 10000);
+      } else {
+        sendAlert();
+      }
+    }
+  }, [fireDetected, latitude, longitude, captureFrame, sendFireAlert]);
 
   // Poll sensor data
   useEffect(() => {
@@ -158,11 +219,17 @@ export function CrisisDashboard() {
         if (!data.error) {
           setSensorData(data);
 
-          // Check DHT11 temperature threshold - instantly reveal pre-loaded camera
+          // Check DHT11 temperature threshold - trigger fire alert
           if (data.dhtTemp >= TEMP_THRESHOLD) {
             if (!cameraVisible) {
-              setAlertLevel("warning");
               setCameraVisible(true);
+            }
+            if (!alertSentRef.current && cameraReady) {
+              sensorTriggeredRef.current = true;
+              alertSentRef.current = true;
+              setFireDetected(true);
+              setAlertLevel("danger");
+              setAlertSent(true);
             }
           }
         }
@@ -172,9 +239,9 @@ export function CrisisDashboard() {
     };
 
     fetchSensorData();
-    const interval = setInterval(fetchSensorData, 1000);
+    const interval = setInterval(fetchSensorData, 1000); // every second
     return () => clearInterval(interval);
-  }, [cameraVisible]);
+  }, [cameraVisible, cameraReady]);
 
   const getTemperatureColor = (temp: number) => {
     if (temp >= TEMP_THRESHOLD) return "text-red-500";
@@ -225,10 +292,9 @@ export function CrisisDashboard() {
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">
+            <p className="text-xs font-semibold text-muted-foreground">
               CrisisNet
             </p>
-            <h1 className="text-3xl font-bold">Sensor Dashboard</h1>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
@@ -299,12 +365,13 @@ export function CrisisDashboard() {
                     </p>
                   </div>
                 </div>
-                {sensorData?.dhtTemp && sensorData.dhtTemp >= TEMP_THRESHOLD && (
-                  <div className="mt-3 flex items-center gap-2 text-sm text-red-500">
-                    <AlertTriangle className="h-4 w-4" />
-                    <span>Threshold exceeded!</span>
-                  </div>
-                )}
+                {sensorData?.dhtTemp &&
+                  sensorData.dhtTemp >= TEMP_THRESHOLD && (
+                    <div className="mt-3 flex items-center gap-2 text-sm text-red-500">
+                      <AlertTriangle className="h-4 w-4" />
+                      <span>Threshold exceeded!</span>
+                    </div>
+                  )}
               </div>
 
               {/* MQ2 Gas Sensor Card */}
@@ -325,7 +392,9 @@ export function CrisisDashboard() {
                       MQ-2 (Smoke/Gas)
                     </p>
                     <p className="text-2xl font-bold">
-                      {sensorData?.mq2 != null ? Math.round(sensorData.mq2) : "--"}
+                      {sensorData?.mq2 != null
+                        ? Math.round(sensorData.mq2)
+                        : "--"}
                     </p>
                   </div>
                 </div>
@@ -446,105 +515,121 @@ export function CrisisDashboard() {
 
           {/* Right Column: Camera Feed - Hidden until threshold exceeded */}
           {cameraVisible && (
-          <div
-            className="overflow-hidden transition-all duration-700 ease-out animate-in fade-in slide-in-from-right"
-          >
-            <div className="rounded-3xl border bg-card p-6 shadow-lg h-full">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div
-                    className={cn(
-                      "rounded-xl p-3",
-                      fireDetected ? "bg-red-500/20" : "bg-primary/10",
-                    )}
-                  >
-                    <Camera
+            <div className="overflow-hidden transition-all duration-700 ease-out animate-in fade-in slide-in-from-right">
+              <div className="rounded-3xl border bg-card p-6 shadow-lg h-full">
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div
                       className={cn(
-                        "h-6 w-6",
-                        fireDetected ? "text-red-500" : "text-primary",
+                        "rounded-xl p-3",
+                        fireDetected ? "bg-red-500/20" : "bg-primary/10",
                       )}
-                    />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-semibold">Live Detection Feed</h2>
-                    <p className="text-sm text-muted-foreground">
-                      {connecting
-                        ? "Connecting to camera..."
-                        : streaming
-                          ? `Detecting ${predictions.length} objects`
-                          : "Camera ready"}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  {fireDetected && (
-                    <span className="animate-pulse rounded-full bg-red-500 px-4 py-1.5 text-sm font-medium text-white">
-                      🔥 Fire Detected
-                    </span>
-                  )}
-                  <span
-                    className={cn(
-                      "rounded-full px-4 py-1.5 text-sm",
-                      streaming
-                        ? "bg-green-500/10 text-green-500"
-                        : connecting
-                          ? "bg-orange-500/10 text-orange-500"
-                          : "bg-secondary text-muted-foreground",
-                    )}
-                  >
-                    {connecting ? "Connecting..." : streaming ? "Live" : "Ready"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="relative overflow-hidden rounded-2xl bg-black">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className={cn(
-                    "h-auto w-full transition-opacity duration-500",
-                    streaming ? "opacity-100" : "opacity-0",
-                  )}
-                  style={{ minHeight: 300 }}
-                />
-
-                {!cameraReady && (
-                  <div
-                    className="absolute inset-0 flex items-center justify-center"
-                    style={{ minHeight: 300 }}
-                  >
-                    <div className="flex flex-col items-center gap-4">
-                      <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-                      <p className="text-white">Initializing camera...</p>
+                    >
+                      <Camera
+                        className={cn(
+                          "h-6 w-6",
+                          fireDetected ? "text-red-500" : "text-primary",
+                        )}
+                      />
                     </div>
+                    <div>
+                      <h2 className="text-xl font-semibold">
+                        Live Detection Feed
+                      </h2>
+                      <p className="text-sm text-muted-foreground">
+                        {connecting
+                          ? "Connecting to camera..."
+                          : streaming
+                            ? `Detecting ${predictions.length} objects`
+                            : "Camera ready"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        setFireDetected(true);
+                        setAlertLevel("danger");
+                        const frame = captureFrame();
+                        sendFireAlert(frame);
+                      }}
+                      disabled={alertSent}
+                      className={cn(
+                        "rounded-full px-4 py-1.5 text-sm font-medium",
+                        alertSent
+                          ? "bg-gray-500 text-white cursor-not-allowed"
+                          : "bg-red-600 text-white hover:bg-red-700",
+                      )}
+                    >
+                      {alertSent ? "Alert Sent" : "🚨 Report Fire"}
+                    </button>
+                    <span
+                      className={cn(
+                        "rounded-full px-4 py-1.5 text-sm",
+                        streaming
+                          ? "bg-green-500/10 text-green-500"
+                          : connecting
+                            ? "bg-orange-500/10 text-orange-500"
+                            : "bg-secondary text-muted-foreground",
+                      )}
+                    >
+                      {connecting
+                        ? "Connecting..."
+                        : streaming
+                          ? "Live"
+                          : "Ready"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="relative overflow-hidden rounded-2xl bg-black">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={cn(
+                      "h-auto w-full transition-opacity duration-500",
+                      streaming ? "opacity-100" : "opacity-0",
+                    )}
+                    style={{ minHeight: 300 }}
+                  />
+
+                  {!cameraReady && (
+                    <div
+                      className="absolute inset-0 flex items-center justify-center"
+                      style={{ minHeight: 300 }}
+                    >
+                      <div className="flex flex-col items-center gap-4">
+                        <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                        <p className="text-white">Initializing camera...</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Detection Stats */}
+                {streaming && predictions.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {predictions.map((pred, idx) => (
+                      <span
+                        key={idx}
+                        className={cn(
+                          "rounded-full px-3 py-1 text-sm",
+                          pred.class.toLowerCase().includes("fire") ||
+                            pred.class.toLowerCase().includes("flame") ||
+                            pred.class.toLowerCase().includes("smoke")
+                            ? "bg-red-500/20 text-red-400"
+                            : "bg-secondary text-foreground",
+                        )}
+                      >
+                        {pred.class}: {Math.round(pred.confidence * 100)}%
+                      </span>
+                    ))}
                   </div>
                 )}
               </div>
-
-              {/* Detection Stats */}
-              {streaming && predictions.length > 0 && (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {predictions.map((pred, idx) => (
-                    <span
-                      key={idx}
-                      className={cn(
-                        "rounded-full px-3 py-1 text-sm",
-                        pred.class.toLowerCase().includes("fire") ||
-                          pred.class.toLowerCase().includes("flame") ||
-                          pred.class.toLowerCase().includes("smoke")
-                          ? "bg-red-500/20 text-red-400"
-                          : "bg-secondary text-foreground",
-                      )}
-                    >
-                      {pred.class}: {Math.round(pred.confidence * 100)}%
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
-          </div>
           )}
         </div>
 
