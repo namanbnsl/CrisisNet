@@ -99,12 +99,12 @@ export function CrisisDashboard() {
           connector,
           wrtcParams: {
             workspaceName: "namanb",
-            workflowId: "crisisnet-final",
-            streamOutputNames: ["output_visualization_1"],
+            workflowId: "crisisnet-hf-model",
+            streamOutputNames: ["output_image"],
             dataOutputNames: ["predictions"],
             processingTimeout: 600,
-            requestedPlan: "webrtc-gpu-medium",
-            requestedRegion: "ap",
+            requestedPlan: "webrtc-gpu-medium", // Options: webrtc-gpu-small, webrtc-gpu-medium, webrtc-gpu-large
+            requestedRegion: "us", // Options: us, eu, ap
           },
           onData: (data) => {
             const dataObj = data as unknown as Record<string, unknown>;
