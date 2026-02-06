@@ -1,5 +1,7 @@
 import { AtpAgent } from "@atproto/api";
 import { NextRequest, NextResponse } from "next/server";
+import { startBlueskyCommentPolling } from "@/lib/bluesky-comments-poller";
+import { setAlertLocation } from "@/lib/alert-location";
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,6 +49,15 @@ export async function POST(request: NextRequest) {
       },
       langs: ["en-US"],
       createdAt: new Date().toISOString(),
+    });
+
+    if (typeof lat === "number" && typeof lng === "number") {
+      setAlertLocation(lat, lng);
+    }
+
+    startBlueskyCommentPolling({
+      durationMs: 10 * 60 * 1000, // 10 minutes
+      intervalMs: 5 * 1000, // 15 seconds
     });
 
     return NextResponse.json({ success: true });

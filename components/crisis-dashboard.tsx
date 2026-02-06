@@ -141,8 +141,6 @@ export function CrisisDashboard() {
   const [streaming, setStreaming] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
-  const [lastPayloadKeys, setLastPayloadKeys] = useState<string[]>([]);
-  const [lastPayloadSize, setLastPayloadSize] = useState(0);
   const [cameraVisible, setCameraVisible] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [alertSent, setAlertSent] = useState(false);
@@ -151,8 +149,10 @@ export function CrisisDashboard() {
   const [alertError, setAlertError] = useState<string | null>(null);
   const alertSentRef = useRef(false);
   const alertInFlightRef = useRef(false);
+  const alertCaptureInFlightRef = useRef(false);
   const pendingAlertRef = useRef(false);
   const pendingImageRef = useRef<string | null>(null);
+  const cameraVisibleRef = useRef(false);
   const fireDetected = predictions.some((p) =>
     FIRE_CLASSES.has(normalizeClassFromPrediction(p)),
   );
@@ -160,14 +160,43 @@ export function CrisisDashboard() {
     ? "danger"
     : "normal";
 
-  const captureFrame = () => {
-    if (!videoRef.current) return null;
+  const captureFrame = async () => {
+    const video = videoRef.current;
+    if (!video) return null;
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+      await new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          video.removeEventListener("loadeddata", finish);
+          video.removeEventListener("canplay", finish);
+          resolve(null);
+        };
+        setTimeout(finish, 600);
+        video.addEventListener("loadeddata", finish, { once: true });
+        video.addEventListener("canplay", finish, { once: true });
+      });
+    }
+
+    if (video.videoWidth === 0 || video.videoHeight === 0) return null;
+
+    if ("requestVideoFrameCallback" in video) {
+      await new Promise<void>((resolve) =>
+        (video as HTMLVideoElement & {
+          requestVideoFrameCallback: (cb: () => void) => void;
+        }).requestVideoFrameCallback(() => resolve()),
+      );
+    } else {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    }
+
     const canvas = document.createElement("canvas");
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    ctx.drawImage(videoRef.current, 0, 0);
+    ctx.drawImage(video, 0, 0);
     return canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
   };
 
@@ -275,10 +304,8 @@ export function CrisisDashboard() {
             requestedRegion: "ap",
           },
           onData: (data) => {
-            if (!cameraVisible) return;
+            if (!cameraVisibleRef.current) return;
             const dataObj = data as unknown as Record<string, unknown>;
-            setLastPayloadKeys(Object.keys(dataObj));
-            setLastPayloadSize(JSON.stringify(dataObj).length);
             const rawPreds = extractPredictions(dataObj);
             if (!rawPreds.length) {
               setPredictions([]);
@@ -294,8 +321,13 @@ export function CrisisDashboard() {
 
             const hasFire = preds.some((p) => FIRE_CLASSES.has(p.class));
             if (hasFire && !alertSentRef.current && !alertInFlightRef.current) {
-              const frame = captureFrame();
-              queueOrSendAlert(frame);
+              void (async () => {
+                if (alertCaptureInFlightRef.current) return;
+                alertCaptureInFlightRef.current = true;
+                const frame = await captureFrame();
+                alertCaptureInFlightRef.current = false;
+                await queueOrSendAlert(frame);
+              })();
             }
           },
         });
@@ -320,11 +352,16 @@ export function CrisisDashboard() {
   }, []);
 
   useEffect(() => {
+    cameraVisibleRef.current = cameraVisible;
+  }, [cameraVisible]);
+
+  useEffect(() => {
     const attachStream = async () => {
       if (cameraVisible && videoRef.current && connectionRef.current) {
         try {
           videoRef.current.srcObject =
             await connectionRef.current.remoteStream();
+          await videoRef.current.play().catch(() => null);
         } catch (error) {
           console.error("Failed to attach stream:", error);
         }
@@ -337,10 +374,12 @@ export function CrisisDashboard() {
     if (!pendingAlertRef.current) return;
     if (!hasLocation) return;
     if (alertSentRef.current || alertInFlightRef.current) return;
-    const frame = pendingImageRef.current ?? captureFrame();
-    pendingAlertRef.current = false;
-    pendingImageRef.current = null;
-    queueOrSendAlert(frame);
+    void (async () => {
+      const frame = pendingImageRef.current ?? (await captureFrame());
+      pendingAlertRef.current = false;
+      pendingImageRef.current = null;
+      await queueOrSendAlert(frame);
+    })();
   }, [hasLocation, pendingAlert]);
 
   // Poll sensor data
