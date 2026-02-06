@@ -31,7 +31,7 @@ type SensorData = {
   timestamp: number;
 };
 
-const TEMP_THRESHOLD = 40; // DHT11 temperature threshold to trigger camera
+const TEMP_THRESHOLD = 40; // trigger cam feed on cross
 
 // MQ-2 Smoke/Gas thresholds
 const MQ2_CLEAN = 300;
@@ -40,94 +40,12 @@ const MQ2_LIGHT = 600;
 // MQ-135 Air Quality thresholds
 const MQ135_GOOD = 400;
 const MQ135_MODERATE = 800;
-const FIRE_CLASSES = new Set(["fire", "flame", "smoke"]);
-
-const normalizeClass = (value: unknown) => {
-  if (typeof value !== "string") return "";
-  return value.trim().toLowerCase();
-};
-
-const normalizeClassFromPrediction = (pred: Prediction) => {
-  return (
-    normalizeClass(pred.class) ||
-    normalizeClass(pred.class_name) ||
-    normalizeClass(pred.className) ||
-    normalizeClass(pred.label)
-  );
-};
-
-const extractPredictionsFromUnknown = (value: unknown): Prediction[] => {
-  if (!value || typeof value !== "object") return [];
-
-  const record = value as Record<string, unknown>;
-  if (Array.isArray(record.predictions)) {
-    return record.predictions as Prediction[];
-  }
-
-  if (record.predictions && typeof record.predictions === "object") {
-    const preds = extractPredictionsFromUnknown(record.predictions);
-    if (preds.length) return preds;
-  }
-
-  if (Array.isArray(record.outputs)) {
-    for (const item of record.outputs) {
-      const preds = extractPredictionsFromUnknown(item);
-      if (preds.length) return preds;
-    }
-  }
-
-  if (record.output) {
-    const preds = extractPredictionsFromUnknown(record.output);
-    if (preds.length) return preds;
-  }
-
-  return [];
-};
+const FIRE_CLASS = "fire";
 
 const extractPredictions = (data: Record<string, unknown>): Prediction[] => {
-  if (Array.isArray(data.predictions)) return data.predictions as Prediction[];
-
-  const output = data.output as Record<string, unknown> | undefined;
-  if (output && Array.isArray(output.predictions)) {
-    return output.predictions as Prediction[];
-  }
-
-  const outputs = data.outputs as unknown;
-  if (Array.isArray(outputs)) {
-    for (const item of outputs) {
-      if (
-        item &&
-        typeof item === "object" &&
-        Array.isArray((item as Record<string, unknown>).predictions)
-      ) {
-        return (item as Record<string, unknown>).predictions as Prediction[];
-      }
-    }
-  }
-
-  if (outputs && typeof outputs === "object") {
-    const outputsObj = outputs as Record<string, unknown>;
-    if (Array.isArray(outputsObj.predictions)) {
-      return outputsObj.predictions as Prediction[];
-    }
-  }
-
-  if (data.serialized_output_data) {
-    if (typeof data.serialized_output_data === "string") {
-      try {
-        const parsed = JSON.parse(data.serialized_output_data) as unknown;
-        const preds = extractPredictionsFromUnknown(parsed);
-        if (preds.length) return preds;
-      } catch (error) {
-        console.warn("Failed to parse serialized_output_data", error);
-      }
-    } else {
-      const preds = extractPredictionsFromUnknown(data.serialized_output_data);
-      if (preds.length) return preds;
-    }
-  }
-
-  return extractPredictionsFromUnknown(data);
+  // @ts-ignore
+  const preds = data.serialized_output_data?.predictions?.predictions;
+  return Array.isArray(preds) ? (preds as Prediction[]) : [];
 };
 
 export function CrisisDashboard() {
@@ -149,13 +67,10 @@ export function CrisisDashboard() {
   const [alertError, setAlertError] = useState<string | null>(null);
   const alertSentRef = useRef(false);
   const alertInFlightRef = useRef(false);
-  const alertCaptureInFlightRef = useRef(false);
   const pendingAlertRef = useRef(false);
   const pendingImageRef = useRef<string | null>(null);
   const cameraVisibleRef = useRef(false);
-  const fireDetected = predictions.some((p) =>
-    FIRE_CLASSES.has(normalizeClassFromPrediction(p)),
-  );
+  const fireDetected = predictions.some((p) => p.class === FIRE_CLASS);
   const alertLevel: "normal" | "warning" | "danger" = fireDetected
     ? "danger"
     : "normal";
@@ -163,7 +78,11 @@ export function CrisisDashboard() {
   const captureFrame = async () => {
     const video = videoRef.current;
     if (!video) return null;
-    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+    if (
+      video.readyState < 2 ||
+      video.videoWidth === 0 ||
+      video.videoHeight === 0
+    ) {
       await new Promise((resolve) => {
         let settled = false;
         const finish = () => {
@@ -183,12 +102,16 @@ export function CrisisDashboard() {
 
     if ("requestVideoFrameCallback" in video) {
       await new Promise<void>((resolve) =>
-        (video as HTMLVideoElement & {
-          requestVideoFrameCallback: (cb: () => void) => void;
-        }).requestVideoFrameCallback(() => resolve()),
+        (
+          video as HTMLVideoElement & {
+            requestVideoFrameCallback: (cb: () => void) => void;
+          }
+        ).requestVideoFrameCallback(() => resolve()),
       );
     } else {
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => resolve(null)),
+      );
     }
 
     const canvas = document.createElement("canvas");
@@ -258,9 +181,9 @@ export function CrisisDashboard() {
       setQueuedForLocation(true);
       return false;
     }
+    const ok = await sendFireAlert(image);
     pendingAlertRef.current = false;
     setQueuedForLocation(false);
-    const ok = await sendFireAlert(image);
     if (ok) {
       alertSentRef.current = true;
       setAlertSent(true);
@@ -314,18 +237,15 @@ export function CrisisDashboard() {
 
             const preds = rawPreds.map((pred) => ({
               ...pred,
-              class: normalizeClassFromPrediction(pred),
+              class: pred.class,
             }));
 
             setPredictions(preds);
 
-            const hasFire = preds.some((p) => FIRE_CLASSES.has(p.class));
+            const hasFire = preds.some((p) => p.class == FIRE_CLASS);
             if (hasFire && !alertSentRef.current && !alertInFlightRef.current) {
-              void (async () => {
-                if (alertCaptureInFlightRef.current) return;
-                alertCaptureInFlightRef.current = true;
+              (async () => {
                 const frame = await captureFrame();
-                alertCaptureInFlightRef.current = false;
                 await queueOrSendAlert(frame);
               })();
             }
@@ -374,7 +294,7 @@ export function CrisisDashboard() {
     if (!pendingAlertRef.current) return;
     if (!hasLocation) return;
     if (alertSentRef.current || alertInFlightRef.current) return;
-    void (async () => {
+    (async () => {
       const frame = pendingImageRef.current ?? (await captureFrame());
       pendingAlertRef.current = false;
       pendingImageRef.current = null;
@@ -452,9 +372,7 @@ export function CrisisDashboard() {
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-muted-foreground">
-              CrisisNet
-            </p>
+            <p className="text-lg font-semibold">CrisisNet</p>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
@@ -709,10 +627,10 @@ export function CrisisDashboard() {
                   </div>
                   <div className="flex items-center gap-3">
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (!fireDetected || alertSent) return;
                         const frame = captureFrame();
-                        queueOrSendAlert(frame);
+                        queueOrSendAlert(await frame);
                       }}
                       disabled={alertSent}
                       className={cn(

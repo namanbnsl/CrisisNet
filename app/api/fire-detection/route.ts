@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     }
 
     await agent.post({
-      text: `🔥 FIRE ALERT 🔥\n \n \nLocation: ${lat}, ${lng}\n \nStay safe and follow official guidance.`,
+      text: `🔥 FIRE ALERT 🔥\n \n \nLocation: ${lat}, ${lng}\nGoogle Maps: https://www.google.com/maps/search/?api=1&query=${lat},${lng} \nStay safe and follow official guidance.`,
       embed: {
         $type: "app.bsky.embed.images",
         images,

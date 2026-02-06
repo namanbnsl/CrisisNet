@@ -53,7 +53,9 @@ export async function POST(request: NextRequest) {
         depth: 0,
       });
 
-      const post = postThread.data.thread.post as any;
+      // @ts-ignore
+      const thread = postThread.data.thread as any;
+      const post = thread.post;
       const commentText = post?.record?.text || "";
 
       const content: any[] = [
