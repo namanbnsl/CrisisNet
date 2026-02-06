@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
 
     startBlueskyCommentPolling({
       durationMs: 10 * 60 * 1000, // 10 minutes
-      intervalMs: 5 * 1000, // 15 seconds
+      intervalMs: 5 * 1000, // 5 seconds
     });
 
     return NextResponse.json({ success: true });
