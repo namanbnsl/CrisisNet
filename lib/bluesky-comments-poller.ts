@@ -22,16 +22,24 @@ function getBaseUrl() {
 
 async function runOnce() {
   const state = getState();
-  if (state.isRunning) return;
+  if (state.isRunning) {
+    console.log("Bluesky comment poller: skip run (already running)");
+    return;
+  }
   state.isRunning = true;
+  const startedAt = Date.now();
+  console.log("Bluesky comment poller: run start");
   try {
     await fetch(`${getBaseUrl()}/api/bluesky-comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
+    console.log("Bluesky comment poller: run success");
   } catch (error) {
     console.error("Bluesky comment poller failed:", error);
   } finally {
+    const elapsedMs = Date.now() - startedAt;
+    console.log(`Bluesky comment poller: run end (${elapsedMs}ms)`);
     state.isRunning = false;
   }
 }
@@ -46,8 +54,20 @@ export function startBlueskyCommentPolling(options?: {
 
   state.runningUntil = Math.max(state.runningUntil, Date.now() + durationMs);
 
-  if (state.timer) return;
+  if (state.timer) {
+    console.log(
+      `Bluesky comment poller: already running (interval ${intervalMs}ms, running until ${new Date(
+        state.runningUntil,
+      ).toISOString()})`,
+    );
+    return;
+  }
 
+  console.log(
+    `Bluesky comment poller: start (interval ${intervalMs}ms, running until ${new Date(
+      state.runningUntil,
+    ).toISOString()})`,
+  );
   void runOnce();
 
   state.timer = setInterval(() => {
@@ -55,6 +75,7 @@ export function startBlueskyCommentPolling(options?: {
     if (now > state.runningUntil) {
       if (state.timer) clearInterval(state.timer);
       state.timer = null;
+      console.log("Bluesky comment poller: stopped (duration elapsed)");
       return;
     }
     void runOnce();

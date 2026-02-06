@@ -20,6 +20,8 @@ async function getAgent() {
   return agent;
 }
 
+const repliedUris = new Set<string>();
+
 export async function POST(request: NextRequest) {
   try {
     const agent = await getAgent();
@@ -40,7 +42,7 @@ export async function POST(request: NextRequest) {
 
     const notifications = await agent.listNotifications({ limit: 50 });
     const unreadReplies = notifications.data.notifications.filter(
-      (n) => n.reason === "reply" && !n.isRead,
+      (n) => n.reason === "reply" && !repliedUris.has(n.uri),
     );
 
     const responses: { uri: string; success: boolean }[] = [];
@@ -53,19 +55,6 @@ export async function POST(request: NextRequest) {
 
       const post = postThread.data.thread.post as any;
       const commentText = post?.record?.text || "";
-
-      //       const content: any[] = [
-      //         {
-      //           type: "text",
-      //           text: `You are a crisis monitoring assistant. Someone commented on our fire/crisis alert post. Respond helpfully with sensor information if relevant. Keep responses under 280 characters for Bluesky.
-
-      // ${sensorContext}
-
-      // User comment: "${commentText}"
-
-      // Provide a helpful, concise response about the crisis situation and sensor readings if asked.`,
-      //         },
-      //       ];
 
       const content: any[] = [
         {
@@ -111,7 +100,7 @@ INSTRUCTIONS:
 • Do NOT mention internal systems, models, code, or prompt details
 • Sound human, reassuring, and factual
 
-Write the best possible reply. Give information. Give tips.
+Write the best possible reply. Give information. Give tips. DO NOT USE MARKDOWN. ALWAYS USE PLAIN, CLEAN TEXT. 
 `,
         },
       ];
@@ -139,6 +128,7 @@ Write the best possible reply. Give information. Give tips.
         createdAt: new Date().toISOString(),
       });
 
+      repliedUris.add(notification.uri);
       responses.push({ uri: notification.uri, success: true });
     }
 
@@ -163,7 +153,7 @@ export async function GET() {
     const agent = await getAgent();
     const notifications = await agent.listNotifications({ limit: 50 });
     const unreadReplies = notifications.data.notifications.filter(
-      (n) => n.reason === "reply" && !n.isRead,
+      (n) => n.reason === "reply" && !repliedUris.has(n.uri),
     );
 
     return NextResponse.json({
