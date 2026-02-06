@@ -31,16 +31,33 @@ type SensorData = {
   timestamp: number;
 };
 
-const TEMP_THRESHOLD = 40; // trigger cam feed on cross
+const TEMP_THRESHOLD = 40;
 
-// MQ-2 Smoke/Gas thresholds
 const MQ2_CLEAN = 300;
 const MQ2_LIGHT = 600;
 
-// MQ-135 Air Quality thresholds
 const MQ135_GOOD = 400;
 const MQ135_MODERATE = 800;
 const FIRE_CLASS = "fire";
+
+type CameraStatus = "idle" | "connecting" | "live" | "error";
+
+type AlertStatus =
+  | "idle"
+  | "queued_for_location"
+  | "sending"
+  | "sent"
+  | "error";
+
+type AlertState = { status: AlertStatus; error: string | null };
+
+const ALERT_INITIAL: AlertState = { status: "idle", error: null };
+
+function useLatest(value: any) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
 
 const extractPredictions = (data: Record<string, unknown>): Prediction[] => {
   // @ts-ignore
@@ -56,20 +73,16 @@ export function CrisisDashboard() {
 
   const { latitude, longitude, accuracy, error, loading } = useGeolocation();
   const [sensorData, setSensorData] = useState<SensorData | null>(null);
-  const [streaming, setStreaming] = useState(false);
-  const [connecting, setConnecting] = useState(false);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [cameraVisible, setCameraVisible] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
-  const [alertSent, setAlertSent] = useState(false);
-  const [pendingAlert, setPendingAlert] = useState(false);
-  const [queuedForLocation, setQueuedForLocation] = useState(false);
-  const [alertError, setAlertError] = useState<string | null>(null);
-  const alertSentRef = useRef(false);
-  const alertInFlightRef = useRef(false);
-  const pendingAlertRef = useRef(false);
+  const [cameraStatus, setCameraStatus] = useState<CameraStatus>("idle");
+  const [alert, setAlert] = useState<AlertState>(ALERT_INITIAL);
+
   const pendingImageRef = useRef<string | null>(null);
-  const cameraVisibleRef = useRef(false);
+
+  const alertRef = useLatest(alert);
+  const cameraVisibleRef = useLatest(cameraVisible);
+
   const fireDetected = predictions.some((p) => p.class === FIRE_CLASS);
   const alertLevel: "normal" | "warning" | "danger" = fireDetected
     ? "danger"
@@ -130,12 +143,10 @@ export function CrisisDashboard() {
     Number.isFinite(longitude);
 
   const sendFireAlert = async (image: string | null) => {
+    const current = alertRef.current.status;
+    if (current === "sending" || current === "sent") return false;
+    setAlert({ status: "sending", error: null });
     try {
-      if (alertInFlightRef.current) return false;
-      alertInFlightRef.current = true;
-      setAlertError(null);
-      setPendingAlert(true);
-      setQueuedForLocation(false);
       const response = await fetch("/api/fire-detection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -149,47 +160,37 @@ export function CrisisDashboard() {
       if (!response.ok) {
         const message = await response.text().catch(() => "");
         console.error("Fire alert failed:", response.status, message);
-        setAlertError(
-          message
+        setAlert({
+          status: "error",
+          error: message
             ? `Failed: ${response.status} ${message}`
             : `Failed: ${response.status}`,
-        );
-        setPendingAlert(false);
-        alertInFlightRef.current = false;
+        });
         return false;
       }
-      setPendingAlert(false);
-      setQueuedForLocation(false);
-      alertInFlightRef.current = false;
+      setAlert({ status: "sent", error: null });
       return true;
-    } catch (error) {
-      console.error("Failed to send fire alert:", error);
-      setAlertError("Network error while sending alert.");
-      setPendingAlert(false);
-      setQueuedForLocation(false);
-      alertInFlightRef.current = false;
+    } catch (err) {
+      console.error("Failed to send fire alert:", err);
+      setAlert({
+        status: "error",
+        error: "Network error while sending alert.",
+      });
       return false;
     }
   };
 
   const queueOrSendAlert = async (image: string | null) => {
-    if (alertSentRef.current) return false;
+    const current = alertRef.current.status;
+    if (current === "sent" || current === "sending") return false;
     if (!hasLocation) {
-      pendingAlertRef.current = true;
       pendingImageRef.current = image;
-      setPendingAlert(true);
-      setQueuedForLocation(true);
+      setAlert({ status: "queued_for_location", error: null });
       return false;
     }
     const ok = await sendFireAlert(image);
-    pendingAlertRef.current = false;
-    setQueuedForLocation(false);
-    if (ok) {
-      alertSentRef.current = true;
-      setAlertSent(true);
-    } else {
-      alertSentRef.current = false;
-      setAlertSent(false);
+    if (!ok && alertRef.current.status !== "sent") {
+      setAlert(ALERT_INITIAL);
     }
     return ok;
   };
@@ -200,7 +201,7 @@ export function CrisisDashboard() {
     const initCamera = async () => {
       if (connectionRef.current) return;
 
-      setConnecting(true);
+      setCameraStatus("connecting");
 
       try {
         const connector = connectors.withApiKey(
@@ -243,7 +244,12 @@ export function CrisisDashboard() {
             setPredictions(preds);
 
             const hasFire = preds.some((p) => p.class == FIRE_CLASS);
-            if (hasFire && !alertSentRef.current && !alertInFlightRef.current) {
+            const alertStatus = alertRef.current.status;
+            if (
+              hasFire &&
+              alertStatus !== "sent" &&
+              alertStatus !== "sending"
+            ) {
               (async () => {
                 const frame = await captureFrame();
                 await queueOrSendAlert(frame);
@@ -254,12 +260,10 @@ export function CrisisDashboard() {
 
         if (!mounted) return;
 
-        setStreaming(true);
-        setCameraReady(true);
-      } catch (error) {
-        console.error("Failed to initialize camera:", error);
-      } finally {
-        if (mounted) setConnecting(false);
+        setCameraStatus("live");
+      } catch (err) {
+        console.error("Failed to initialize camera:", err);
+        if (mounted) setCameraStatus("error");
       }
     };
 
@@ -272,18 +276,14 @@ export function CrisisDashboard() {
   }, []);
 
   useEffect(() => {
-    cameraVisibleRef.current = cameraVisible;
-  }, [cameraVisible]);
-
-  useEffect(() => {
     const attachStream = async () => {
       if (cameraVisible && videoRef.current && connectionRef.current) {
         try {
           videoRef.current.srcObject =
             await connectionRef.current.remoteStream();
           await videoRef.current.play().catch(() => null);
-        } catch (error) {
-          console.error("Failed to attach stream:", error);
+        } catch (err) {
+          console.error("Failed to attach stream:", err);
         }
       }
     };
@@ -291,18 +291,15 @@ export function CrisisDashboard() {
   }, [cameraVisible]);
 
   useEffect(() => {
-    if (!pendingAlertRef.current) return;
+    if (alert.status !== "queued_for_location") return;
     if (!hasLocation) return;
-    if (alertSentRef.current || alertInFlightRef.current) return;
     (async () => {
       const frame = pendingImageRef.current ?? (await captureFrame());
-      pendingAlertRef.current = false;
       pendingImageRef.current = null;
-      await queueOrSendAlert(frame);
+      await sendFireAlert(frame);
     })();
-  }, [hasLocation, pendingAlert]);
+  }, [hasLocation, alert.status]);
 
-  // Poll sensor data
   useEffect(() => {
     const fetchSensorData = async () => {
       try {
@@ -310,17 +307,15 @@ export function CrisisDashboard() {
         const data = await res.json();
         if (!data.error) {
           setSensorData(data);
-
-          // Check DHT11 temperature threshold - reveal camera feed
           setCameraVisible((prev) => prev || data.dhtTemp >= TEMP_THRESHOLD);
         }
-      } catch (error) {
-        console.error("Failed to fetch sensor data:", error);
+      } catch (err) {
+        console.error("Failed to fetch sensor data:", err);
       }
     };
 
     fetchSensorData();
-    const interval = setInterval(fetchSensorData, 1000); // every second
+    const interval = setInterval(fetchSensorData, 1000);
     return () => clearInterval(interval);
   }, [cameraVisible]);
 
@@ -390,17 +385,17 @@ export function CrisisDashboard() {
               <div
                 className={cn(
                   "h-3 w-3 rounded-full",
-                  cameraReady
+                  cameraStatus === "live"
                     ? "bg-green-500"
-                    : connecting
+                    : cameraStatus === "connecting"
                       ? "animate-pulse bg-orange-500"
                       : "bg-gray-400",
                 )}
               />
               <span className="text-sm text-muted-foreground">
-                {cameraReady
+                {cameraStatus === "live"
                   ? "Camera ready"
-                  : connecting
+                  : cameraStatus === "connecting"
                     ? "Loading camera..."
                     : "Camera"}
               </span>
@@ -617,9 +612,9 @@ export function CrisisDashboard() {
                         Live Detection Feed
                       </h2>
                       <p className="text-sm text-muted-foreground">
-                        {connecting
+                        {cameraStatus === "connecting"
                           ? "Connecting to camera..."
-                          : streaming
+                          : cameraStatus === "live"
                             ? `Detecting ${predictions.length} objects`
                             : "Camera ready"}
                       </p>
@@ -628,39 +623,39 @@ export function CrisisDashboard() {
                   <div className="flex items-center gap-3">
                     <button
                       onClick={async () => {
-                        if (!fireDetected || alertSent) return;
+                        if (!fireDetected || alert.status === "sent") return;
                         const frame = captureFrame();
                         queueOrSendAlert(await frame);
                       }}
-                      disabled={alertSent}
+                      disabled={alert.status === "sent"}
                       className={cn(
                         "rounded-full px-4 py-1.5 text-sm font-medium",
-                        alertSent
+                        alert.status === "sent"
                           ? "bg-gray-500 text-white cursor-not-allowed"
                           : "bg-red-600 text-white hover:bg-red-700",
                       )}
                     >
-                      {alertSent
+                      {alert.status === "sent"
                         ? "Alert Sent"
-                        : pendingAlert
-                          ? queuedForLocation
-                            ? "Queued..."
-                            : "Sending..."
-                          : "🚨 Report Fire"}
+                        : alert.status === "queued_for_location"
+                          ? "Queued..."
+                          : alert.status === "sending"
+                            ? "Sending..."
+                            : "🚨 Report Fire"}
                     </button>
                     <span
                       className={cn(
                         "rounded-full px-4 py-1.5 text-sm",
-                        streaming
+                        cameraStatus === "live"
                           ? "bg-green-500/10 text-green-500"
-                          : connecting
+                          : cameraStatus === "connecting"
                             ? "bg-orange-500/10 text-orange-500"
                             : "bg-secondary text-muted-foreground",
                       )}
                     >
-                      {connecting
+                      {cameraStatus === "connecting"
                         ? "Connecting..."
-                        : streaming
+                        : cameraStatus === "live"
                           ? "Live"
                           : "Ready"}
                     </span>
@@ -675,12 +670,12 @@ export function CrisisDashboard() {
                     muted
                     className={cn(
                       "h-auto w-full transition-opacity duration-500",
-                      streaming ? "opacity-100" : "opacity-0",
+                      cameraStatus === "live" ? "opacity-100" : "opacity-0",
                     )}
                     style={{ minHeight: 300 }}
                   />
 
-                  {!cameraReady && (
+                  {cameraStatus !== "live" && (
                     <div
                       className="absolute inset-0 flex items-center justify-center"
                       style={{ minHeight: 300 }}
@@ -693,14 +688,14 @@ export function CrisisDashboard() {
                   )}
                 </div>
 
-                {alertError && (
+                {alert.error && (
                   <div className="mt-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-                    {alertError}
+                    {alert.error}
                   </div>
                 )}
 
                 {/* Detection Stats */}
-                {streaming && predictions.length > 0 && (
+                {cameraStatus === "live" && predictions.length > 0 && (
                   <div className="mt-4 flex flex-wrap gap-2">
                     {predictions.map((pred, idx) => (
                       <span
