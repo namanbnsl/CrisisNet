@@ -1,1 +1,3 @@
+[1st place]
+
 CrisisNet ingests data from sensors and reliably verifies it through a webcam via a fine-tuned YOLO model. If fire is verified, posts are automatically made on Bluesky with an image as well as a map with a circle showing affected area. If there are any replies made on the post, our LLM-based bot replies to it with the latest data available to it. Made for TISBHacks2026
